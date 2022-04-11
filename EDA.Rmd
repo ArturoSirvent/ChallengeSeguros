@@ -1,0 +1,109 @@
+---
+title: "EDA"
+author: "Miguel Hortelano"
+date: "29/3/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Paquetes requeridos
+
+```{r}
+library(tidyverse)
+library(readxl)
+library(ggplot2)
+library(stats)
+```
+
+# Carga de datos
+
+Preparamos los datos, filtramos aquellos sin sentido o que juzgamos sospechosos y pasamos algunas variables a factor
+
+```{r}
+
+data <- read_excel("base_challenge.xlsx")%>%
+  filter( Veh_val > 0, Edad < 100)%>%
+  select(-C_postal, -C_rcmat_culpa, -C_rcmat_inoc)
+  
+  
+data$fpag <- factor(data$fpag, labels = c('Anual efectivo', 'Anual domiciliado',"semestral esfectivo", "semestral 1ºp efectivo, semestral domiciliado"))
+#data$C_postal <- factor(data$C_postal)
+data$Veh_marca <- factor(data$Veh_marca)
+data$Veh_cuso <- factor(data$Veh_cuso)#codificado en dos valores , 3 y 4. Pero no sabemos las etiquetas
+data$Veh_comb <- factor(data$Veh_comb)
+data$Cus_des <- factor(data$Cus_des)
+data$b7_puertas <- factor(data$b7_puertas, ordered = TRUE)
+```
+```{r}
+str(data)#controlamos los datos
+summary(data)
+```
+Lo de antes pero en automático por si acaso
+```{r, waring = F}
+for(i in colnames(data)){# Convertimos los vectores de texto en factores (Codigo postal, marca del vehiculo,combinacion, tipo de vehiculo, clase de vehiculo,)
+  if(class(data[[i]])=="character"){
+    print(i)
+    data[i]= factor(data[[i]])
+  }
+}
+```
+
+# EDA
+
+Empezamos revisando la distribución de algunas variables
+
+```{r}
+ggplot(data,aes(x = Score2))+geom_histogram()
+
+rep <- filter(data, Veh_val < 100000)
+
+hist(rep$Veh_val, breaks = 100) #Tenemos un valor solitario por debajo de 0, eliminar
+hist(rep$Veh_peso, breaks = 100)
+hist(data$veh_ant, breaks = 100)
+#hist(data$b7_puertas, breaks = 100)
+hist(data$b7_longitud, breaks = 100)
+hist(data$ant_compnia, breaks = 100)
+hist(data$C_rcmat_culpa, breaks = 100)
+hist(data$C_rcmat_inoc, breaks = 100)
+hist(data$veh_ant, breaks = 100)
+```
+
+
+Distribución de variables numéricas según el númeto de accindentes.
+```{r}
+data$N_rcmat <- factor(data$N_rcmat, ordered = TRUE)
+
+for(i in colnames(data)){
+  if(class(data[[i]]) == "numeric"){
+    a <- ggplot(data = data, aes_string(x = "N_rcmat", y = i, fill = "N_rcmat"))+geom_violin()
+    print(a)
+  }
+  
+}
+```
+
+Mosaico de variables categóricas según número de accidentes
+```{r}
+
+for(i in colnames(data)){
+  if(class(data[[i]]) == "character"){
+    mosaicplot( as.formula(paste0(" ~ ", i,"+N_rcmat")) ,data = data)
+  }
+  
+}
+```
+
+Tablas de contingencia de variables categóricas según número de accidentes
+```{r}
+for(i in colnames(data)){
+  if(class(data[[i]]) == "character"){
+    a <- xtabs(as.formula(paste0(" ~ ", i,"+N_rcmat")) ,data = data)
+    print(a)
+  }
+  
+}
+```
+
