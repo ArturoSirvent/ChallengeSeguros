@@ -1,0 +1,287 @@
+---
+title: "EDA"
+author: "Francisco Olayo Gonzalez"
+date: "13/4/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Paquetes requeridos
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(stats)
+library(dplyr)
+library(vcd)
+library(glmnet)
+library(insurancerating)
+```
+
+# Carga de datos
+
+Preparamos los datos, filtramos aquellos sin sentido o que juzgamos sospechosos y pasamos algunas variables a factor
+
+```{r}
+
+data <- read_excel("base_challenge.xlsx") %>% 
+  filter( Veh_val > 0, b7_longitud > 0, Edad < 100) %>% 
+  dplyr::select(-C_postal, -C_rcmat_culpa, -C_rcmat_inoc)
+  
+  
+data$fpag <- factor(data$fpag, labels = c('Anual efectivo', 'Anual domiciliado',"semestral esfectivo", "semestral 1ºp efectivo", "semestral domiciliado"))
+#data$C_postal <- factor(data$C_postal)
+data$Veh_marca <- factor(data$Veh_marca)
+data$Veh_cuso <- factor(data$Veh_cuso)#codificado en dos valores , 3 y 4. Pero no sabemos las etiquetas
+data$Veh_comb <- factor(data$Veh_comb)
+data$Cus_des <- factor(data$Cus_des)
+data$b7_puertas <- factor(data$b7_puertas, ordered = TRUE)
+```
+
+```{r}
+str(data)#controlamos los datos
+summary(data)
+```
+Lo de antes pero en automático por si acaso
+```{r, waring = F}
+for(i in colnames(data)){# Convertimos los vectores de texto en factores (Codigo postal, marca del vehiculo,combinacion, tipo de vehiculo, clase de vehiculo,)
+  
+  
+  #Este bloque es por una rallada respecto los warnings que aparecen al ejecutar el código
+  
+  #respuesta corta --- no preocuparse
+  #larga --- los formatos fecha y factor ordenado devuelven una lista de dos elementos en vez de uno, no es relevante
+  #print(class(data[[i]])=="character")
+  #if(length(class(data[[i]])=="character")>1){
+   # print(i)
+  #  print(class(data[[i]]))
+  #}
+  
+  
+  if(class(data[[i]])=="character"){
+    print(i)
+    data[i]= factor(data[[i]])
+  }
+}
+```
+
+# EDA
+
+Empezamos revisando la distribución de algunas variables
+
+```{r}
+ggplot(data,aes(x = Score2))+geom_histogram()
+
+rep <- filter(data, Veh_val < 100000)
+
+hist(rep$Veh_val, breaks = 100) #Tenemos un valor solitario por debajo de 0, eliminar
+hist(rep$Veh_peso, breaks = 100)
+hist(data$veh_ant, breaks = 100)
+#hist(data$b7_puertas, breaks = 100)
+hist(data$b7_longitud, breaks = 100)
+hist(data$ant_compnia, breaks = 100)
+hist(data$C_rcmat_culpa, breaks = 100)
+hist(data$C_rcmat_inoc, breaks = 100)
+hist(data$veh_ant, breaks = 100)
+```
+
+
+Distribución de variables numéricas según el númeto de accindentes.
+```{r}
+data$N_rcmat <- factor(data$N_rcmat, ordered = TRUE)
+
+for(i in colnames(data)){
+  if(class(data[[i]]) == "numeric"){
+    a <- ggplot(data = data, aes_string(x = "N_rcmat", y = i, fill = "N_rcmat"))+geom_boxplot()#+geom_jitter(aes(alpha = 0.1))
+    print(a)
+  }
+  
+}
+```
+
+Distribución de variables numéricas según número de accidentes
+```{r}
+
+data$N_rcmat <- factor(data$N_rcmat , ordered = TRUE)
+for(i in colnames(data)){
+  if(class(data[[i]]) == "numeric"){
+    a <- ggplot(data = data, aes_string( x = i, fill = "N_rcmat"))+geom_histogram()
+    print(a)
+  }
+  
+}
+```
+
+
+Variables con mayor correlación de 0.7
+```{r}
+
+#CORRELACIONES
+
+library(reshape2)
+
+cormat <- melt(round(cor(data[,lapply(data,is.numeric) %>% unlist]),2))
+
+cormat %>% ggplot(aes(x=Var1,y=Var2,fill=value)) + geom_tile()+  
+  scale_fill_gradient(low = "white", high = "red") +
+  geom_text(aes(label = value), color = "black", size = 2.5) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  coord_fixed()
+
+
+# Edad y Años de carné están muy correlacionados. Deberíamos eliminar una de ellas y quedarnos con la otra. A ser posible, nos quedamos con años de carné que es más genérica.
+  
+
+ggplot(data,aes(x=Edad,y=Carne,color = factor(N_rcmat) ))+geom_point()
+ggplot(data,aes(x=Veh_peso,y=Veh_cdin,color = factor(N_rcmat) ))+geom_point()
+ggplot(data,aes(x=Veh_peso,y=b7_longitud,color = factor(N_rcmat) ))+geom_point()
+ggplot(data,aes(x=veh_ant,y=ant_compnia,color = factor(N_rcmat) ))+geom_point()
+```
+
+```{r}
+
+data$N_rcmat <- factor(data$N_rcmat , ordered = TRUE)
+for(i in colnames(data)){
+  if(class(data[[i]]) == "numeric"){
+    a <- ggplot(data = data, aes_string( x = i, fill = "N_rcmat"))+geom_histogram()
+    print(a)
+  }
+  
+}
+```
+
+
+Tablas de contingencia de variables categóricas según número de accidentes
+```{r}
+for(i in colnames(data)){
+  if(class(data[[i]]) == "factor"){
+    a <- xtabs(as.formula(paste0(" ~ ", i,"+N_rcmat")) ,data = data)
+    print(a)
+  }
+  
+}
+```
+
+```{r}
+# Función que discretiza en cuantiles
+quantbreaks <- function(predictor,cortes=10,cuantiles=F){
+  qnt <- quantile(predictor,probs=seq(0,1,1/cortes),include.lowest=T)
+  qnt[1] <- qnt[1]-0.01
+  qnt[cortes] <- qnt[cortes]+0.01 
+  
+  if(cuantiles){return(qnt)}                # devuelve cortes 
+    else{return(cut(predictor,breaks=qnt))} # devuelve var discretizada
+}
+```
+
+
+```{r}
+data2 <- data 
+data2 <- data2 %>% mutate(Edad_Cat = quantbreaks(data$Edad, cortes=10), Expo_Cat =quantbreaks(data$Expo, cortes=10), 
+                 Carne_Cat=quantbreaks(data$Carne, cortes=10), Veh_cdin_Cat = quantbreaks(data$Veh_cdin, cortes=5), 
+                 Veh_val_Cat=quantbreaks(data$Veh_val, cortes=10))
+
+```
+
+```{r}
+data2 %>% ggplot(aes(x=Edad_Cat, y=N_rcmat)) + stat_summary(fun = "mean", geom = "point")
+```
+
+```{r}
+data2 %>% group_by(Edad_Cat) %>% summarise(media=mean(N_rcmat)) %>% 
+    ggplot()+geom_point(aes(x=Edad_Cat,y=media))
+```
+
+```{r}
+data2 %>% group_by(Expo_Cat) %>% summarise(media=mean(N_rcmat)) %>% 
+    ggplot()+geom_point(aes(x=Expo_Cat,y=media))
+```
+
+
+
+
+```{r}
+ggplot(data2,aes(y = Veh_cdin, x = factor(N_rcmat)))+geom_boxplot()
+```
+
+```{r}
+data2 %>% group_by(Veh_cdin_Cat) %>% 
+    ggplot()+geom_boxplot(aes(x=Veh_cdin_Cat,y=N_rcmat))
+```
+
+
+
+
+```{r}
+# quitamos la marca
+
+data3 <- data2 %>% dplyr::select(-Veh_marca)
+```
+
+```{r}
+library(rsample)
+set.seed(216514)
+particion <- initial_split(data3,prop = 2/3) # particion aleatoria pura 
+train_data <- training(particion)
+test_data <- testing(particion)
+```
+
+
+
+
+
+```{r}
+# FALLA PORQUE PASA ALGO CON LAS VARIABLES CATEGÓRICAS
+
+#formula <- N_rcmat~ . -poliza-Edad-Carne-Expo-Veh_cdin-Veh_val-Veh_peso-N_rcmat-N_rccorp-fini-fvto-N_culpa-N_inoc-C_rcmat_agregado-C_rccorp-fpag-Tipo_veh-Cus_des-Veh_val_Cat-Edad_Cat-b7_puertas
+
+# of_var <- log(train_data$Expo/365)
+
+formula <- N_rccorp~ +Score2+Veh_cuso+ant_compnia+Carne_Cat+Veh_cdin_Cat+Expo_Cat
+
+
+Po.log <- glm(formula, data=train_data, family=poisson(link='log'))
+
+starting.values <- coef(Po.log)
+starting.values[starting.values < 0] <- 0.0001
+#mod <- lm(N_rcmat~ . -poliza-Edad-Carne-Expo-Veh_cdin-Veh_val-Veh_peso-N_rcmat-N_rccorp-fini-fvto-N_culpa-N_inoc-C_rcmat_agregado-C_rccorp-fpag,data=data2) 
+summary(Po.log)
+ # evitamos valor esperado negativo
+#Po.id <- glm(N_rcmat~ . -poliza-Edad-Carne-Expo-Veh_cdin-Veh_val-Veh_peso-N_rcmat-N_rccorp-fini-fvto-N_culpa-N_inoc-C_rcmat_agregado-C_rccorp-fpag ,data=train_data,start=starting.values,family=poisson(link="identity")) 
+```
+
+```{r}
+
+#Paquete exclusivamente para temas de seguros, tarifar y tal quizas es util https://github.com/MHaringa/insurancerating
+
+which(p.Po.log > 1.05)
+
+```
+
+
+```{r}
+# TEST 
+
+p.Po.log <- predict(Po.log, test_data , type="response")
+
+ec <- function(prediccion, observado){
+  sum((prediccion-observado)^2)
+}
+
+ea <- function(prediccion, observado){
+  sum(abs(prediccion-observado))
+}
+
+ec(p.Po.log, test_data$N_rccorp)
+ea(p.Po.log, test_data$N_rccorp)
+hist(p.Po.log)
+hist(test_data$N_rccorp)
+offset=log(train_data$Expo/365.25)
+```
+Al hacer la prediccion sobre N_rccorp, los resultados siguen una ditribucion mas parecida a una poisson, pero con N_rcmat no, no se porque todavia.
+
+
