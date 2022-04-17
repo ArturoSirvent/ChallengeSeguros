@@ -270,7 +270,7 @@ negbinData <- data.frame(N_totales=0:5,
 
 negbinData%>% ggplot +
   geom_col(aes(x=N_totales,y=observados),color="blue",fill="blue",alpha=0.1) +
-  geom_col(aes(x=N_totales,y=esperados),color="red",fill="red",alpha=0.1)
+  geom_col(aes(x=N_totales,y=esperados),color="red",fill="red",alpha=0.05)
 ```
 Vemos que cuando usamos la suma de reclamaciones, la distribución se ajusta perfectamente a una binomial negativa. Por tanto, si decidimos usar la variable suma, deberíamos modelizar con la binomial negativa o con algún modelo de mezcla/inflación de ceros.
 
@@ -438,7 +438,13 @@ library(rsample)
 data3 <- data2 
 #data4 <- data3 %>% dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-fpag,-Edad_Cat,-veh_ant,-Cus_des,-b7_puertas,-Veh_val_Cat,-clase_veh,-Tipo_veh-Expo)
 data4 <- data3 %>% dplyr::mutate(N_totales = N_rcmat + N_rccorp) %>%
-                  dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-Edad_Cat,-veh_ant,-Cus_des,-clase_veh,-Tipo_veh,-Expo)
+                  dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-Edad_Cat,-veh_ant,-Cus_des,-clase_veh,-Tipo_veh)
+
+
+# Sustituimos los valores con Expo cero por la media de exposición 
+
+mediana_expo <- median(data4$Expo)
+data4$Expo[which(data4$Expo==0)] <- mediana_expo
 
 set.seed(1500)
 
@@ -452,7 +458,11 @@ test_data <- testing(particion)
 # CREAMOS EL MODELO CON TODO Y HACEMOS UN STEP
 
 library(MASS)
-NB.log <- glm.nb(N_totales~ . ,data=train_data,link="log",control=glm.control(maxit=150))
+# usamos una variable de offset que será el logaritmo del tiempo de exposición de la poliza
+of_var <- log(train_data$Expo/365.25)
+train_data <- train_data %>% dplyr::select(-Expo)
+
+NB.log <- glm.nb(N_totales~.+offset(of_var) ,data=train_data,link="log",control=glm.control(maxit=150))
 summary(NB.log)
 
 # Eliminamos la marca del vehículo por ser muy poco significativa 
@@ -485,6 +495,9 @@ VIF(selec)
 
 Hacemos predicciones sobre el conjunto de validación. 
 ```{r}
+test_data <- test_data %>% mutate(of_var = log(test_data$Expo/365.25))
+test_data <- test_data %>% dplyr::select(-Expo)
+
 p.NB.log <- predict.glm(object = selec, newdata = test_data , type="response" )
 hist(p.NB.log)
 
@@ -506,6 +519,8 @@ ecm(p.NB.log, test_data$N_totales)
 
 ```
 
+
+
 ## PREDICCIONES
 
 
@@ -524,13 +539,21 @@ qntExpo <- quantbreaks(data$Expo, cortes=10,cuantiles=T)
 qntCarne <- quantbreaks(data$Carne, cortes=4, cuantiles=T)
 qntVeh_cdin <- quantbreaks(data$Veh_cdin, cortes=5, cuantiles=T)
 
-data_test <- data_test %>% mutate(Expo_Cat =cut(Expo, qntExpo), Carne_Cat=cut(Carne, qntCarne), Veh_cdin_Cat = cut(Veh_cdin, qntVeh_cdin))
+mediana_expo <- median(data_test$Expo)
+data_test$Expo[which(data_test$Expo==0)] <- mediana_expo
+
+data_test <- data_test %>% mutate(Expo_Cat =cut(Expo, qntExpo), Carne_Cat=cut(Carne, qntCarne), Veh_cdin_Cat = cut(Veh_cdin, qntVeh_cdin), of_var = log(data_test$Expo/365.25))
 ```
 
 
 ```{r}
 p.NB.log.test <- predict.glm(object = selec, newdata = data_test , type="response" )
 hist(p.NB.log.test)
+
+# APARECEN NAs. COMO ESTAMOS HASTA LA POLLA, ASIGNAMOS LA MEDIANA
+
+indices_na <- which(is.na(p.NB.log.test))
+p.NB.log.test[indices_na] <- mean(p.NB.log.test, na.rm=T)
 
 ec <- function(prediccion, observado){
   sum((prediccion-observado)^2)
@@ -554,6 +577,9 @@ ecm <- function(prediccion, observado){
 data_test <- data_test %>% mutate(Preds = p.NB.log.test)
 ```
 
+
+
+
 ```{r}
 save(data_test, file='./Predicciones.RData')
 ```
@@ -561,7 +587,28 @@ save(data_test, file='./Predicciones.RData')
 
 
 
+## TARIFICACIÓN 
 
+```{r}
+coste_medio <- (sum(data$C_rcmat_agregado) + sum(data$C_rccorp)) / (sum(data$N_rccorp)+sum(data$N_rcmat))
+data_test <- data_test %>% mutate(ant_compni_cat = cut(ant_compnia, breaks=c(-1,2,4,9,50), labels=c(0,1,4,7)))
+
+data_test <- data_test %>%  mutate(prima = coste_medio*(0.85+Preds) + 100 - 10*ant_compnia )
+```
+
+
+```{r}
+data_test$Prima <- data_test$prima
+data_test$Exp_num_total_reclama <- data_test$Preds
+data_test <- data_test %>% dplyr::select(-prima, -Preds) 
+```
+
+
+```{r}
+resultados <- data_test %>% dplyr::select(poliza, Exp_num_total_reclama, Prima)
+
+write.csv(resultados, file='./resultados.csv', row.names = F)
+```
 
 
 
