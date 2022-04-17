@@ -496,9 +496,13 @@ ea <- function(prediccion, observado){
   sum(abs(prediccion-observado))
 }
 
+ecm <- function(prediccion, observado){
+  sum((prediccion-observado)^2)/dim(test_data)[1]
+}
 
 ec(p.NB.log, test_data$N_totales)
 ea(p.NB.log, test_data$N_totales)
+ecm(p.NB.log, test_data$N_totales)
 
 ```
 
