@@ -438,7 +438,7 @@ library(rsample)
 data3 <- data2 
 #data4 <- data3 %>% dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-fpag,-Edad_Cat,-veh_ant,-Cus_des,-b7_puertas,-Veh_val_Cat,-clase_veh,-Tipo_veh-Expo)
 data4 <- data3 %>% dplyr::mutate(N_totales = N_rcmat + N_rccorp) %>%
-                  dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-fpag,-Edad_Cat,-veh_ant,-Cus_des,-clase_veh,-Expo)
+                  dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-Edad_Cat,-veh_ant,-Cus_des,-clase_veh,-Tipo_veh,-Expo)
 
 set.seed(1500)
 
@@ -448,72 +448,59 @@ test_data <- testing(particion)
 ```
 
 
-
-
-
-
 ```{r}
-# modelo 
+# CREAMOS EL MODELO CON TODO Y HACEMOS UN STEP
 
 library(MASS)
 NB.log <- glm.nb(N_totales~ . ,data=train_data,link="log",control=glm.control(maxit=150))
 summary(NB.log)
-# quitamos la marca porque no es significativa
-NB.log <- update(NB.log, ~.-Veh_marca)
-summary(NB.log)
 
-# quitamos el valor del vehiculo porque no es significativa
-NB.log <- update(NB.log, ~.-Veh_val_Cat)
-summary(NB.log)
+# Eliminamos la marca del vehículo por ser muy poco significativa 
 
-# quitamos el tipo de vehiculo porque no es significativa
-NB.log <- update(NB.log, ~.-Tipo_veh)
-summary(NB.log)
-
-# quitamos el numero de puertas del vehiculo porque no es significativa
-NB.log <- update(NB.log, ~.-b7_puertas)
+NB.log <- update(NB.log, ~. -Veh_marca)
 summary(NB.log)
 ```
 
 ```{r}
-# hacemos un step con lo que tenemos a ver qué modelo nos propone 
+# BUSCAMOS UN STEP PARA BUSCAR EL MEJOR MODELO 
 
-selec <- step(NB.log, direction = 'both', trace=1)
+selec <- step(NB.log, direction='both', trace=1)
+
 ```
 
-
 ```{r}
-# hacemos un summary para ver el resultado del último modelo 
-
+# Vemos un resumen del mejor modelo 
 summary(selec)
 ```
 
+
+
+
+
+No hay problemas de colinealidad
 ```{r}
 library(regclass)
 VIF(selec)
 ```
 
-
-
-Probamos a hacer primero el step y luego eliminar variables que no sean significativas.
+Hacemos predicciones. 
 ```{r}
-NB.log2 <- glm.nb(N_totales~ . ,data=train_data,link="log",control=glm.control(maxit=150))
-selec2 <- step(NB.log2, direction='both', trace=1)
+p.NB.log <- predict.glm(object = selec, newdata = test_data , type="response" )
+hist(p.NB.log)
+
+ec <- function(prediccion, observado){
+  sum((prediccion-observado)^2)
+}
+
+ea <- function(prediccion, observado){
+  sum(abs(prediccion-observado))
+}
+
+
+ec(p.NB.log, test_data$N_totales)
+ea(p.NB.log, test_data$N_totales)
+
 ```
 
-```{r}
-summary(selec2)
 
-selec2 <- update(selec2, ~. -Veh_marca)
-summary(selec2)
-
-selec2 <- update(selec2, ~. -b7_puertas)
-summary(selec2)
-
-selec2 <- update(selec2, ~. -Tipo_veh)
-summary(selec2)
-
-selec2 <- update(selec2, ~. -Veh_val_Cat)
-summary(selec2)
-```
 
