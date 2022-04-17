@@ -483,7 +483,7 @@ library(regclass)
 VIF(selec)
 ```
 
-Hacemos predicciones. 
+Hacemos predicciones sobre el conjunto de validación. 
 ```{r}
 p.NB.log <- predict.glm(object = selec, newdata = test_data , type="response" )
 hist(p.NB.log)
@@ -505,6 +505,64 @@ ea(p.NB.log, test_data$N_totales)
 ecm(p.NB.log, test_data$N_totales)
 
 ```
+
+## PREDICCIONES
+
+
+```{r}
+library(readxl)
+data_test <- read_excel("data/base_challenge.xlsx", sheet = "Test")
+#View(data_test)
+```
+
+```{r}
+# Creamos las variables categóricas para el conjunto de test también. Solo lo hacemos para aquellas que están incluidas en el modelo.
+
+# Primero replicamos los niveles de las variables categóricas usadas en el modelo durante el entrenamiento. 
+
+qntExpo <- quantbreaks(data$Expo, cortes=10,cuantiles=T)
+qntCarne <- quantbreaks(data$Carne, cortes=4, cuantiles=T)
+qntVeh_cdin <- quantbreaks(data$Veh_cdin, cortes=5, cuantiles=T)
+
+data_test <- data_test %>% mutate(Expo_Cat =cut(Expo, qntExpo), Carne_Cat=cut(Carne, qntCarne), Veh_cdin_Cat = cut(Veh_cdin, qntVeh_cdin))
+```
+
+
+```{r}
+p.NB.log.test <- predict.glm(object = selec, newdata = data_test , type="response" )
+hist(p.NB.log.test)
+
+ec <- function(prediccion, observado){
+  sum((prediccion-observado)^2)
+}
+
+ea <- function(prediccion, observado){
+  sum(abs(prediccion-observado))
+}
+
+ecm <- function(prediccion, observado){
+  sum((prediccion-observado)^2)/dim(test_data)[1]
+}
+
+#ec(p.NB.log.test, test_data$N_totales)
+#ea(p.NB.log.test, test_data$N_totales)
+#ecm(p.NB.log.test, test_data$N_totales)
+```
+
+
+```{r}
+data_test <- data_test %>% mutate(Preds = p.NB.log.test)
+```
+
+```{r}
+save(data_test, file='./Predicciones.RData')
+```
+
+
+
+
+
+
 
 
 
