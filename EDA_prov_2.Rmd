@@ -74,8 +74,8 @@ hist(data$veh_ant, breaks = 100)
 #hist(data$b7_puertas, breaks = 100)
 hist(data$b7_longitud, breaks = 100)
 hist(data$ant_compnia, breaks = 100)
-hist(data$C_rcmat_culpa, breaks = 100)
-hist(data$C_rcmat_inoc, breaks = 100)
+#hist(data$C_rcmat_culpa, breaks = 100)
+#hist(data$C_rcmat_inoc, breaks = 100)
 hist(data$veh_ant, breaks = 100)
 ```
 
@@ -159,13 +159,6 @@ data2 %>% group_by(Veh_cdin_Cat) %>% summarise(media=mean(N_rcmat)) %>%
     ggplot()+geom_point(aes(x=Veh_cdin_Cat,y=media))
 ```
 
-```{r}
-aux <- which(data2$Expo == 0)
-data2$Expo[aux] <- 0.0001
-```
-
-
-
 ## Posibles agrupaciones para categorizar
 
 ```{r}
@@ -213,6 +206,22 @@ siniestros %>% ggplot()+geom_col(aes(x=N_rcmat,y=observados),color="blue",fill="
   geom_col(aes(x=N_rcmat,y=esperados),color="red",fill="red",alpha=0.1)
 ```
 
+También podría ser una binomial negativa perfectamente. De hecho, visulamente parece que ajusta un poco mejor con la binomial negativa que con la poisson. Además, en la tabla anterior comprobabamos como existía un poco de exceso de ceros con respecto a lo esperado.
+```{r}
+fit.bn <- goodfit(data3$N_rcmat,type = "nbinomial", method="MinChisq")
+
+# goodfit essentially computes the fitted values of a discrete distribution (either Poisson, 
+# binomial or negative binomial) to the count data given in x. If the parameters are not specified # they are estimated either by ML or Minimum Chi-squared.
+
+negbinData <- data.frame(N_rcmat=0:4,
+                         observados=fit.bn$observed/dim(data3)[1], 
+                         esperados=fit.bn$fitted/dim(data3)[1])
+
+negbinData%>% ggplot +
+  geom_col(aes(x=N_rcmat,y=observados),color="blue",fill="blue",alpha=0.1) +
+  geom_col(aes(x=N_rcmat,y=esperados),color="red",fill="red",alpha=0.05)
+```
+
 
 Tampoco existe exceso de ceros en la varible `N_rccorp`.  
 ```{r}
@@ -229,7 +238,6 @@ siniestros <- siniestros%>% mutate(esperados=dpois(N_rccorp,lambda = mean(data3$
 siniestros %>% ggplot()+geom_col(aes(x=N_rccorp,y=observados),color="blue",fill="blue",alpha=0.1)+
   geom_col(aes(x=N_rccorp,y=esperados),color="red",fill="red",alpha=0.1)
 ```
-
 
 Comprobamos si existe exceso de ceros en la variable suma `N_rcmat + N_rccorp`. 
 
@@ -278,145 +286,6 @@ Vemos que cuando usamos la suma de reclamaciones, la distribución se ajusta per
 Para cada uno de los posibles modelos que podemos elegir, habrá que decidir si le metemos la variable de offset o no. Otro de los aspectos que tenemos que decidir, es si usar regularización o no. Esto puede ser útil para evitar el sobreajuste si nos encontramos en dicho caso (modelos LASSO, RIDGE, ELASTICNET).
 
 Al final nos quedaremos con el que mejor resultados nos dé.
-
-
-
-```{r}
-library(rsample)
-data3 <- data3 %>% dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-fpag,-Edad_Cat,-veh_ant,-Cus_des,-b7_puertas,-Veh_val_Cat,-clase_veh,-Tipo_veh)
-
-set.seed(1500)
-
-particion <- initial_split(data3,prop = 2/3, strata = N_totales) # particion aleatoria pura 
-train_data <- training(particion)
-test_data <- testing(particion)
-```
-
-
-
-
-
-```{r}
-# FALLA PORQUE PASA ALGO CON LAS VARIABLES CATEGÓRICAS
-
-#Variable Cus_des da error
-
-formula <- N_totales~ . -poliza-Edad-Carne-Expo-fini-fvto-Veh_cdin-Veh_val-Veh_peso-Veh_cuso-N_rcmat-N_rccorp-N_culpa-N_inoc-C_rcmat_agregado-C_rccorp-fpag-Edad_Cat-veh_ant-Cus_des-Expo_Cat-b7_puertas-Veh_val_Cat-clase_veh-Tipo_veh
-
-#formula <- N_rcmat~ . -poliza-Edad-Carne-Expo-Veh_cdin-Veh_val-Veh_peso-N_rcmat-N_rccorp-fini-fvto-N_culpa-N_inoc-C_rcmat_agregado-C_rccorp-fpag-Tipo_veh-Cus_des-Veh_val_Cat-Edad_Cat-b7_puertas
-
-# of_var <- log(train_data$Expo/365)
-
-#formula <- N_rccorp~ +Score2+Veh_cuso+ant_compnia+Carne_Cat+Veh_cdin_Cat+Expo_Cat
-
-
-#Po.log <- glm(N_totales~ .-Expo-N_totales, data=train_data, family=gaussian(link='log'))
-No.id <- glm(N_totales~. -Expo-N_totales, data=train_data)
-No.log <- glm(N_totales~. -Expo-N_totales, data=train_data, start=coef(No.id), family=gaussian(link='log'))
-summary(No.log)
-
-starting.values <- coef(Po.log)
-starting.values[starting.values < 0] <- 0.0001
-#mod <- lm(N_rcmat~ . -poliza-Edad-Carne-Expo-Veh_cdin-Veh_val-Veh_peso-N_rcmat-N_rccorp-fini-fvto-N_culpa-N_inoc-C_rcmat_agregado-C_rccorp-fpag,data=data2)
-summary(Po.log)
- # evitamos valor esperado negativo
-#Po.id <- glm(N_rcmat~ . -poliza-Edad-Carne-Expo-Veh_cdin-Veh_val-Veh_peso-N_rcmat-N_rccorp-fini-fvto-N_culpa-N_inoc-C_rcmat_agregado-C_rccorp-fpag ,data=train_data,start=starting.values,family=poisson(link="identity")) 
-```
-
-
-```{r}
-# TEST 
-# offset = log(test_data$Expo/365.25)
-# 
-# test_data2 <- test_data
-# 
-# nd <- data.frame(test_data2, offset = offset) 
-
-#p.Po.log <- predict.glm(object = Po.log, newdata = test_data , type="response" )
-p.No.log <- predict.glm(object = No.log, newdata = test_data , type="response" )
-
-ec <- function(prediccion, observado){
-  sum((prediccion-observado)^2)
-}
-
-ea <- function(prediccion, observado){
-  sum(abs(prediccion-observado))
-}
-
-#ec(p.Po.log, test_data$N_totales)
-#ea(p.Po.log, test_data$N_totales)
-ec(p.No.log, test_data$N_totales)
-ea(p.No.log, test_data$N_totales)
-
-hist(p.Po.log)
-#hist(test_data$N_totales)
-#offset=log(train_data$Expo/365.25)
-
-
-```
-Al hacer la prediccion sobre N_rccorp, los resultados siguen una ditribucion mas parecida a una poisson, pero con N_rcmat no, no se porque todavia.
-
-```{r}
-#Codificamos las respuestas por umbrales
-ind5 <- which(p.No.log > 1.4)
-p.No.log[ind5] <- 5
-
-ind4 <- which(p.No.log > 1.3 & p.No.log< 1.4)
-p.No.log[ind4] <- 4
-
-ind3 <- which(p.No.log > 1 & p.No.log< 1.3)
-p.No.log[ind3] <- 3
-
-ind2 <- which(p.No.log > 0.35 & p.No.log< 1)
-p.No.log[ind2] <- 2
-
-ind1 <- which(p.No.log > 0.185 & p.No.log< 0.35)
-p.No.log[ind1] <- 1
-
-ind0 <- which(p.No.log < 0.185)
-p.No.log[ind0] <- 0
-```
-
-```{r}
-length(which(p.No.log == 0))
-```
-```{r}
-length(which(train_data$N_totales == 4))
-table(train_data$N_totales)
-table(test_data$N_totales)
-```
-
-
-```{r}
-ec <- function(prediccion, observado){
-  sum((prediccion-observado)^2)
-}
-
-ea <- function(prediccion, observado){
-  sum(abs(prediccion-observado))
-}
-
-#ec(p.Po.log, test_data$N_totales)
-#ea(p.Po.log, test_data$N_totales)
-
-ec(p.No.log, test_data$N_totales)
-ea(p.No.log, test_data$N_totales)
-hist(p.Po.log)
-#hist(test_data$N_rccorp)
-#offset=log(train_data$Expo/365.25)
-
-
-```
-
-```{r}
-#p.Po.log <- factor(p.Po.log)
-p.No.log <- factor(p.No.log)
-test_data$N_totales <- factor(test_data$N_totales)
-
-confusionMatrix(p.No.log,  test_data$N_totales)
-
-```
-
 
 
 ## Binomial negativa 
@@ -482,6 +351,10 @@ selec <- step(NB.log, direction='both', trace=1)
 # Vemos un resumen del mejor modelo 
 summary(selec)
 ```
+```{r}
+selec <- update(selec, ~. + I(Score2^3))
+summary(selec)
+```
 
 
 
@@ -520,6 +393,350 @@ ecm(p.NB.log, test_data$N_totales)
 ```
 
 
+
+## Binomial Negativa + Poisson (N_rcmat+N_ccorp)
+
+Probamos a predecir por separado las reclamaciones materiales y las corporales, para ver si mejoran los resultados. 
+
+Comenzamos con las reclamaciones materiales. Para estas reclamaciones ajustaremos un modelo binomial negativo, en principio con las misma variables que el modelo que predecía ambas reclamaciones juntas.
+
+
+```{r}
+data2 <- data 
+data2 <- data2 %>% mutate(Edad_Cat = quantbreaks(data$Edad, cortes=10), Expo_Cat =quantbreaks(data$Expo, cortes=10), 
+                 Carne_Cat=quantbreaks(data$Carne, cortes=4), Veh_cdin_Cat = quantbreaks(data$Veh_cdin, cortes=5), 
+                 Veh_val_Cat=quantbreaks(data$Veh_val, cortes=10))
+
+```
+
+
+```{r}
+library(rsample)
+data3 <- data2 
+#data4 <- data3 %>% dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-fpag,-Edad_Cat,-veh_ant,-Cus_des,-b7_puertas,-Veh_val_Cat,-clase_veh,-Tipo_veh-Expo)
+data4 <- data3 %>% dplyr::mutate(N_totales = N_rcmat + N_rccorp) %>%
+                  dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_totales,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-Edad_Cat,-veh_ant,-Cus_des,-clase_veh,-Tipo_veh)
+
+
+# Sustituimos los valores con Expo cero por la media de exposición 
+
+mediana_expo <- median(data4$Expo)
+data4$Expo[which(data4$Expo==0)] <- mediana_expo
+
+set.seed(1500)
+
+particion <- initial_split(data4,prop = 2/3, strata = N_rcmat) # particion aleatoria pura 
+train_data <- training(particion)
+test_data <- testing(particion)
+```
+
+
+
+```{r}
+# CREAMOS EL MODELO CON TODO Y HACEMOS UN STEP
+
+library(MASS)
+# usamos una variable de offset que será el logaritmo del tiempo de exposición de la poliza. Esto se hace porque la predicción queremos que dependa del tiempo.
+of_var <- log(train_data$Expo/365.25)
+train_data <- train_data %>% dplyr::select(-Expo)
+
+NB.log <- glm.nb(N_rcmat~.+offset(of_var) ,data=train_data,link="log",control=glm.control(maxit=150))
+summary(NB.log)
+
+# Eliminamos la marca del vehículo por ser muy poco significativa 
+
+NB.log <- update(NB.log, ~. -Veh_marca)
+summary(NB.log)
+```
+
+```{r}
+# BUSCAMOS UN STEP PARA BUSCAR EL MEJOR MODELO 
+
+selec <- step(NB.log, direction='both', trace=1)
+
+```
+
+```{r}
+# Vemos un resumen del mejor modelo 
+summary(selec)
+```
+
+
+
+
+
+No hay problemas de colinealidad
+```{r}
+library(regclass)
+VIF(selec)
+```
+
+
+Hacemos predicciones sobre el conjunto de validación. 
+```{r}
+test_data <- test_data %>% mutate(of_var = log(test_data$Expo/365.25))
+test_data <- test_data %>% dplyr::select(-Expo)
+
+p.NB.log <- predict.glm(object = selec, newdata = test_data , type="response" )
+hist(p.NB.log)
+
+ec <- function(prediccion, observado){
+  sum((prediccion-observado)^2)
+}
+
+ea <- function(prediccion, observado){
+  sum(abs(prediccion-observado))
+}
+
+ecm <- function(prediccion, observado){
+  sum((prediccion-observado)^2)/dim(test_data)[1]
+}
+
+ec(p.NB.log, test_data$N_rcmat)
+ea(p.NB.log, test_data$N_rcmat)
+ecm(p.NB.log, test_data$N_rcmat)
+
+```
+
+
+
+
+Ahora hacemos lo mismo pero para las reclamaciones corporales. En este caso ajustaremos un modelo de Poisson, ya que hemos visto que no existía exceso de ceros.
+
+
+```{r}
+data2 <- data 
+data2 <- data2 %>% mutate(Edad_Cat = quantbreaks(data$Edad, cortes=10), Expo_Cat =quantbreaks(data$Expo, cortes=10), 
+                 Carne_Cat=quantbreaks(data$Carne, cortes=4), Veh_cdin_Cat = quantbreaks(data$Veh_cdin, cortes=5), 
+                 Veh_val_Cat=quantbreaks(data$Veh_val, cortes=10))
+
+```
+
+
+```{r}
+library(rsample)
+data3 <- data2 
+#data4 <- data3 %>% dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-fpag,-Edad_Cat,-veh_ant,-Cus_des,-b7_puertas,-Veh_val_Cat,-clase_veh,-Tipo_veh-Expo)
+data4 <- data3 %>% dplyr::mutate(N_totales = N_rcmat + N_rccorp) %>%
+                  dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_totales,-N_rcmat,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-Edad_Cat,-veh_ant,-Cus_des,-clase_veh,-Tipo_veh)
+
+
+# Sustituimos los valores con Expo cero por la media de exposición 
+
+mediana_expo <- median(data4$Expo)
+data4$Expo[which(data4$Expo==0)] <- mediana_expo
+
+set.seed(1500)
+
+particion <- initial_split(data4,prop = 2/3, strata = N_rccorp) # particion aleatoria pura 
+train_data <- training(particion)
+test_data <- testing(particion)
+```
+
+
+
+```{r}
+# CREAMOS EL MODELO CON TODO Y HACEMOS UN STEP
+
+library(MASS)
+# usamos una variable de offset que será el logaritmo del tiempo de exposición de la poliza. Esto se hace porque la predicción queremos que dependa del tiempo.
+of_var <- log(train_data$Expo/365.25)
+train_data <- train_data %>% dplyr::select(-Expo)
+
+Po.log <- glm(N_rccorp~. , offset=of_var, data=train_data, family=poisson(link='log'))
+summary(Po.log)
+
+# Eliminamos la marca del vehículo por ser muy poco significativa 
+
+Po.log <- update(Po.log, ~. -Veh_marca)
+summary(Po.log)
+```
+
+
+
+```{r}
+# BUSCAMOS UN STEP PARA BUSCAR EL MEJOR MODELO 
+
+selec <- step(Po.log, direction='both', trace=1)
+
+```
+
+```{r}
+# Vemos un resumen del mejor modelo 
+summary(selec)
+```
+
+
+No hay problemas de colinealidad
+```{r}
+library(regclass)
+VIF(selec)
+```
+
+Hacemos predicciones sobre el conjunto de validación. 
+```{r}
+test_data <- test_data %>% mutate(of_var = log(test_data$Expo/365.25))
+test_data <- test_data %>% dplyr::select(-Expo)
+
+p.Po.log <- predict.glm(object = selec, newdata = test_data , type="response" )
+hist(p.Po.log)
+
+ec <- function(prediccion, observado){
+  sum((prediccion-observado)^2)
+}
+
+ea <- function(prediccion, observado){
+  sum(abs(prediccion-observado))
+}
+
+ecm <- function(prediccion, observado){
+  sum((prediccion-observado)^2)/dim(test_data)[1]
+}
+
+ec(p.Po.log, test_data$N_rccorp)
+ea(p.Po.log, test_data$N_rccorp)
+ecm(p.Po.log, test_data$N_rccorp)
+
+```
+
+
+
+Una vez hemos hecho las predicciones por separado, las sumamos para obtener el número de reclamaciones totales esperado. 
+
+
+
+```{r}
+data2 <- data 
+data2 <- data2 %>% mutate(Edad_Cat = quantbreaks(data$Edad, cortes=10), Expo_Cat =quantbreaks(data$Expo, cortes=10), 
+                 Carne_Cat=quantbreaks(data$Carne, cortes=4), Veh_cdin_Cat = quantbreaks(data$Veh_cdin, cortes=5), 
+                 Veh_val_Cat=quantbreaks(data$Veh_val, cortes=10))
+
+```
+
+
+```{r}
+library(rsample)
+data3 <- data2 
+#data4 <- data3 %>% dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-fpag,-Edad_Cat,-veh_ant,-Cus_des,-b7_puertas,-Veh_val_Cat,-clase_veh,-Tipo_veh-Expo)
+data4 <- data3 %>% dplyr::mutate(N_totales = N_rcmat + N_rccorp) %>%
+                  dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-Edad_Cat,-veh_ant,-Cus_des,-clase_veh,-Tipo_veh)
+
+
+# Sustituimos los valores con Expo cero por la media de exposición 
+
+mediana_expo <- median(data4$Expo)
+data4$Expo[which(data4$Expo==0)] <- mediana_expo
+
+set.seed(1500)
+
+particion <- initial_split(data4,prop = 2/3, strata = N_totales) # particion aleatoria pura 
+train_data <- training(particion)
+test_data <- testing(particion)
+```
+
+```{r}
+# La predicción de las totales será la suma de las materiales y las corporales predichas por separado
+p.NB_Po.log <- p.NB.log + p.Po.log
+
+# Medidas de bondad
+ec(p.NB_Po.log, test_data$N_totales)
+ea(p.NB_Po.log, test_data$N_totales)
+ecm(p.NB_Po.log, test_data$N_totales)
+```
+
+Parece que predecir por separado no da mejores resultados que predecir ambas de forma conjunta. Los resultados se asemejan algo, pero predecir por separado parece que va peor. Sin embargo, sí que podría ser interesante predecir por separado a la hora de la tarificación, aunque estas predicciones sean algo peores.
+
+
+
+
+## ZINB (ZERO INFLATION NEGATIVE BINOMIAL)
+
+Ahora probamos el modelo de inflación de ceros para una binomial negativa. En este caso, lo que vamos a hacer es predecir las reclamaciones totales de una estacada, igual que en el primer caso. En este caso lo único que cambiará será el modelo que usamos. 
+
+
+
+```{r}
+data2 <- data 
+data2 <- data2 %>% mutate(Edad_Cat = quantbreaks(data$Edad, cortes=10), Expo_Cat =quantbreaks(data$Expo, cortes=10), 
+                 Carne_Cat=quantbreaks(data$Carne, cortes=4), Veh_cdin_Cat = quantbreaks(data$Veh_cdin, cortes=5), 
+                 Veh_val_Cat=quantbreaks(data$Veh_val, cortes=10))
+
+```
+
+
+```{r}
+library(rsample)
+data3 <- data2 
+#data4 <- data3 %>% dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-fpag,-Edad_Cat,-veh_ant,-Cus_des,-b7_puertas,-Veh_val_Cat,-clase_veh,-Tipo_veh-Expo)
+data4 <- data3 %>% dplyr::mutate(N_totales = N_rcmat + N_rccorp) %>%
+                  dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-Edad_Cat,-veh_ant,-Cus_des,-clase_veh,-Tipo_veh)
+
+
+# Sustituimos los valores con Expo cero por la media de exposición 
+
+mediana_expo <- median(data4$Expo)
+data4$Expo[which(data4$Expo==0)] <- mediana_expo
+
+set.seed(1500)
+
+particion <- initial_split(data4,prop = 2/3, strata = N_totales) # particion aleatoria pura 
+train_data <- training(particion)
+test_data <- testing(particion)
+```
+
+
+```{r}
+# CREAMOS EL MODELO CON TODO Y HACEMOS UN STEP
+
+library(MASS)
+# usamos una variable de offset que será el logaritmo del tiempo de exposición de la poliza
+of_var <- log(train_data$Expo/365.25)
+#train_data <- train_data %>% dplyr::mutate(offset = of_var)
+#train_data <- train_data %>% dplyr::select(-Expo)
+# Usamos solo las variables que nos salían significativas entre sí de los modelos anteriores
+# Veh_marca + Veh_val_Cat +b7_longitud +
+fml <-formula(N_totales ~    ant_compnia + Score2 + Expo_Cat + Carne_Cat + Veh_cdin_Cat + offset(log(Expo/365.25)) |  ant_compnia + Score2 + Expo_Cat + Carne_Cat + Veh_cdin_Cat) 
+
+ZINB.off <- zeroinfl(fml ,data=train_data, dist='negbin')
+summary(ZINB.off)
+```
+
+
+```{r}
+# BUSCAMOS UN STEP PARA BUSCAR EL MEJOR MODELO 
+
+#selec <- step(ZINB.off,  direction='both', trace=1)
+
+```
+
+```{r}
+#summary(selec)
+```
+
+```{r}
+test_data <- test_data %>% mutate(of_var = log(test_data$Expo/365.25))
+test_data <- test_data %>% dplyr::select(-Expo)
+
+p.ZINB.off <- predict.glm(object = ZINB.off, newdata = test_data , type="response", offset=of_var )
+hist(p.ZINB.off)
+
+ec <- function(prediccion, observado){
+  sum((prediccion-observado)^2)
+}
+
+ea <- function(prediccion, observado){
+  sum(abs(prediccion-observado))
+}
+
+ecm <- function(prediccion, observado){
+  sum((prediccion-observado)^2)/dim(test_data)[1]
+}
+
+ec(p.ZINB.off, test_data$N_totales)
+ea(p.ZINB.off, test_data$N_totales)
+ecm(p.ZINB.off, test_data$N_totales)
+
+```
 
 ## PREDICCIONES
 
@@ -586,7 +803,6 @@ save(data_test, file='./Predicciones.RData')
 
 
 
-
 ## TARIFICACIÓN 
 
 ```{r}
@@ -609,6 +825,10 @@ resultados <- data_test %>% dplyr::select(poliza, Exp_num_total_reclama, Prima)
 
 write.csv(resultados, file='./resultados.csv', row.names = F)
 ```
+
+
+
+
 
 
 
