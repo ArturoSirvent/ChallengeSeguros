@@ -1,0 +1,412 @@
+---
+title: "EDA"
+author: "Francisco Olayo Gonzalez"
+date: "13/4/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Paquetes requeridos
+
+```{r}
+library(readxl)
+library(ggplot2)
+library(stats)
+library(dplyr)
+library(vcd)
+library(glmnet)
+library(insurancerating)
+library(stats)
+library(caret)
+library(pscl)
+```
+
+# Carga de datos y preprocesado
+
+Preparamos los datos, filtramos aquellos sin sentido o que juzgamos sospechosos y pasamos algunas variables a factor
+
+```{r}
+
+data <- read_excel("./data/base_challenge.xlsx") %>% 
+  filter( Veh_val > 0, Edad < 100) %>% 
+  dplyr::select(-C_postal, -C_rcmat_culpa, -C_rcmat_inoc)
+  
+  
+data$fpag <- factor(data$fpag, labels = c('Anual efectivo', 'Anual domiciliado',"semestral esfectivo", "semestral 1ºp efectivo", "semestral domiciliado"))
+#data$C_postal <- factor(data$C_postal)
+data$Veh_marca <- factor(data$Veh_marca)
+data$Veh_cuso <- factor(data$Veh_cuso)#codificado en dos valores , 3 y 4. Pero no sabemos las etiquetas
+data$Veh_comb <- factor(data$Veh_comb)
+data$Cus_des <- factor(data$Cus_des)
+data$b7_puertas <- factor(data$b7_puertas, ordered = TRUE)
+```
+
+```{r}
+str(data)#controlamos los datos
+summary(data)
+```
+
+```{r}
+# Función que discretiza en cuantiles
+quantbreaks <- function(predictor,cortes=10,cuantiles=F){
+  qnt <- quantile(predictor,probs=seq(0,1,1/cortes),include.lowest=T)
+  qnt[1] <- qnt[1]-0.01
+  qnt[cortes] <- qnt[cortes]+0.01 
+  
+  if(cuantiles){return(qnt)}                # devuelve cortes 
+    else{return(cut(predictor,breaks=qnt))} # devuelve var discretizada
+}
+```
+
+
+```{r}
+data2 <- data 
+data2 <- data2 %>% mutate(Edad_Cat = quantbreaks(data$Edad, cortes=10), Expo_Cat =quantbreaks(data$Expo, cortes=10), 
+                 Carne_Cat=quantbreaks(data$Carne, cortes=10), Veh_cdin_Cat = quantbreaks(data$Veh_cdin, cortes=5), 
+                 Veh_val_Cat=quantbreaks(data$Veh_val, cortes=10))
+
+# Añadimos una columna con suma de reclamaciones
+
+data3 <- data2 %>% dplyr::mutate(N_totales = N_rcmat + N_rccorp)
+
+```
+
+
+
+
+## Elección del modelo
+
+
+Obsevamos que no existe exceso de ceros en la variable `N_rcmat`.
+```{r}
+obs <- data3 %>% group_by(N_rcmat=N_rcmat) %>% 
+  summarise(observados=round(n()/24995,3))
+esperados <- round(dpois(0:4,mean(data3$N_rcmat)),3)
+cbind(obs,esperados)
+```
+
+Comprobamos que claramente es una poisson.
+```{r}
+siniestros <- data3%>% group_by(N_rcmat)%>% summarise(observados=n()/dim(data3)[1])
+siniestros <- siniestros%>% mutate(esperados=dpois(N_rcmat,lambda = mean(data3$N_rcmat)))
+
+siniestros %>% ggplot()+geom_col(aes(x=N_rcmat,y=observados),color="blue",fill="blue",alpha=0.1)+
+  geom_col(aes(x=N_rcmat,y=esperados),color="red",fill="red",alpha=0.1)
+```
+
+También podría ser una binomial negativa perfectamente. De hecho, visulamente parece que ajusta un poco mejor con la binomial negativa que con la poisson. Además, en la tabla anterior comprobabamos como existía un poco de exceso de ceros con respecto a lo esperado.
+```{r}
+fit.bn <- goodfit(data3$N_rcmat,type = "nbinomial", method="MinChisq")
+
+# goodfit essentially computes the fitted values of a discrete distribution (either Poisson, 
+# binomial or negative binomial) to the count data given in x. If the parameters are not specified # they are estimated either by ML or Minimum Chi-squared.
+
+negbinData <- data.frame(N_rcmat=0:4,
+                         observados=fit.bn$observed/dim(data3)[1], 
+                         esperados=fit.bn$fitted/dim(data3)[1])
+
+negbinData%>% ggplot +
+  geom_col(aes(x=N_rcmat,y=observados),color="blue",fill="blue",alpha=0.1) +
+  geom_col(aes(x=N_rcmat,y=esperados),color="red",fill="red",alpha=0.05)
+```
+
+
+Tampoco existe exceso de ceros en la varible `N_rccorp`.  
+```{r}
+obs <- data3 %>% group_by(N_rccorp=N_rccorp) %>% 
+  summarise(observados=round(n()/24995,3))
+esperados <- round(dpois(0:2,mean(data3$N_rccorp)),3)
+cbind(obs,esperados)
+```
+Comprobamos que claramente es una poisson.
+```{r}
+siniestros <- data3%>% group_by(N_rccorp)%>% summarise(observados=n()/dim(data3)[1])
+siniestros <- siniestros%>% mutate(esperados=dpois(N_rccorp,lambda = mean(data3$N_rccorp)))
+
+siniestros %>% ggplot()+geom_col(aes(x=N_rccorp,y=observados),color="blue",fill="blue",alpha=0.1)+
+  geom_col(aes(x=N_rccorp,y=esperados),color="red",fill="red",alpha=0.1)
+```
+
+Comprobamos si existe exceso de ceros en la variable suma `N_rcmat + N_rccorp`. 
+
+```{r}
+obs <- data3 %>% group_by(N_totales=N_totales) %>% 
+  summarise(observados=round(n()/24995,3))
+esperados <- round(dpois(0:5,mean(data3$N_totales)),3)
+cbind(obs,esperados)
+```
+
+Vemos que puede existir algo de exceso de ceros en la variables suma `N_totales`. Por tanto, podría hacer falta usar un modelo para corregir dicho exceso. 
+
+Comenzamos planteando un modelo de Poisson o una Normal de media y varianza iguales. También sería conveniente probar alguno con inflación de ceros como la binomial negativa.
+
+Otra opción podría ser usar otro tipo de modelos como modelos de mezcla (hurdle: modeliza los ceros con una bernouilli y el resto de valores con una poisson truncada. Útil cuando hay muchos o pocos ceros), árboles de decisión, bagging,... pero lo plantearemos en el futuro. Empezaremos probando poisson y gaussiana.
+
+
+Comparamos con la distribución de poisson.
+```{r}
+siniestros <- data3%>% group_by(N_totales)%>% summarise(observados=n()/dim(data3)[1])
+siniestros <- siniestros%>% mutate(esperados=dpois(N_totales,lambda = mean(data3$N_totales)))
+
+siniestros %>% ggplot()+geom_col(aes(x=N_totales,y=observados),color="blue",fill="blue",alpha=0.1)+
+  geom_col(aes(x=N_totales,y=esperados),color="red",fill="red",alpha=0.1)
+```
+
+
+Comparamos con la distribución de binomial negativa.
+```{r}
+fit.bn <- goodfit(data3$N_totales,type = "nbinomial", method="MinChisq")
+
+# goodfit essentially computes the fitted values of a discrete distribution (either Poisson, 
+# binomial or negative binomial) to the count data given in x. If the parameters are not specified # they are estimated either by ML or Minimum Chi-squared.
+
+negbinData <- data.frame(N_totales=0:5,
+                         observados=fit.bn$observed/dim(data3)[1], 
+                         esperados=fit.bn$fitted/dim(data3)[1])
+
+negbinData%>% ggplot +
+  geom_col(aes(x=N_totales,y=observados),color="blue",fill="blue",alpha=0.1) +
+  geom_col(aes(x=N_totales,y=esperados),color="red",fill="red",alpha=0.05)
+```
+Vemos que cuando usamos la suma de reclamaciones, la distribución se ajusta perfectamente a una binomial negativa. Por tanto, si decidimos usar la variable suma, deberíamos modelizar con la binomial negativa o con algún modelo de mezcla/inflación de ceros.
+
+
+Para cada uno de los posibles modelos que podemos elegir, habrá que decidir si le metemos la variable de offset o no. Otro de los aspectos que tenemos que decidir, es si usar regularización o no. Esto puede ser útil para evitar el sobreajuste si nos encontramos en dicho caso (modelos LASSO, RIDGE, ELASTICNET).
+
+Al final nos quedaremos con el que mejor resultados nos dé.
+
+
+
+## Binomial negativa 
+
+Probamos a modelar el número total de reclamaciones con una binomial negativa, ya que hemos visto que sigue prácticamente dicha distribución.
+
+
+```{r}
+library(rsample)
+data3 <- data2 
+#data4 <- data3 %>% dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-fpag,-Edad_Cat,-veh_ant,-Cus_des,-b7_puertas,-Veh_val_Cat,-clase_veh,-Tipo_veh-Expo)
+data4 <- data3 %>% dplyr::mutate(N_totales = N_rcmat + N_rccorp) %>%
+                  dplyr::select(-poliza,
+                              -Edad,-Carne,
+                              -fini,-fvto,
+                              -Veh_cdin,-Veh_val,
+                              -Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,
+                              -Edad_Cat,
+                              -veh_ant,-Cus_des,-clase_veh,-Tipo_veh)
+
+
+# discretizamos en teniendo en cuenta la función objetivo
+#library(OneR)
+#var.num.disc <- optbin(formula=N_totales~Edad+Carne+Veh_cdin+Veh_val, data=data4, method = c("logreg"))
+#var.num.disc <- var.num.disc %>% dplyr::select(-N_totales)
+#data4[,names(var.num.disc)] <- var.num.disc
+
+
+# Sustituimos los valores con Expo cero por la media de exposición 
+
+mediana_expo <- median(data4$Expo)
+data4$Expo[which(data4$Expo==0)] <- mediana_expo
+
+set.seed(1500)
+
+particion <- initial_split(data4,prop = 2/3, strata = N_totales) # particion aleatoria pura 
+train_data <- training(particion)
+test_data <- testing(particion)
+```
+
+
+```{r}
+# CREAMOS EL MODELO CON TODO Y HACEMOS UN STEP
+
+library(MASS)
+# usamos una variable de offset que será el logaritmo del tiempo de exposición de la poliza
+of_var <- log(train_data$Expo/365.25)
+train_data <- train_data %>% dplyr::select(-Expo)
+
+NB.log <- glm.nb(N_totales~.+offset(of_var) ,data=train_data,link="log",control=glm.control(maxit=150))
+summary(NB.log)
+
+# Eliminamos la marca del vehículo por ser muy poco significativa 
+
+NB.log <- update(NB.log, ~. -Veh_marca)
+summary(NB.log)
+```
+
+
+
+```{r}
+# BUSCAMOS UN STEP PARA BUSCAR EL MEJOR MODELO 
+
+selec <- step(NB.log, direction='both', trace=1)
+
+```
+
+
+
+```{r}
+# Vemos un resumen del mejor modelo 
+summary(selec)
+```
+
+```{r}
+selec <- update(selec, ~. + I(Score2^3))
+summary(selec)
+```
+
+
+No hay problemas de colinealidad
+```{r}
+library(regclass)
+VIF(selec)
+```
+
+
+Hacemos predicciones sobre el conjunto de validación. 
+```{r}
+test_data <- test_data %>% mutate(of_var = log(test_data$Expo/365.25))
+test_data <- test_data %>% dplyr::select(-Expo)
+
+p.NB.log <- predict.glm(object = selec, newdata = test_data , type="response" )
+hist(p.NB.log)
+
+ec <- function(prediccion, observado){
+  sum((prediccion-observado)^2)
+}
+
+ea <- function(prediccion, observado){
+  sum(abs(prediccion-observado))
+}
+
+ecm <- function(prediccion, observado){
+  sum((prediccion-observado)^2)/dim(test_data)[1]
+}
+
+ec(p.NB.log, test_data$N_totales)
+ea(p.NB.log, test_data$N_totales)
+ecm(p.NB.log, test_data$N_totales)
+
+```
+
+
+
+
+## PREDICCIONES
+
+
+```{r}
+library(readxl)
+data_test <- read_excel("data/base_challenge.xlsx", sheet = "Test")
+#View(data_test)
+```
+
+```{r}
+# Creamos las variables categóricas para el conjunto de test también. Solo lo hacemos para aquellas que están incluidas en el modelo.
+
+# Primero replicamos los niveles de las variables categóricas usadas en el modelo durante el entrenamiento. 
+
+qntExpo <- quantbreaks(data$Expo, cortes=10,cuantiles=T)
+qntCarne <- quantbreaks(data$Carne, cortes=4, cuantiles=T)
+qntVeh_cdin <- quantbreaks(data$Veh_cdin, cortes=5, cuantiles=T)
+
+mediana_expo <- median(data_test$Expo)
+data_test$Expo[which(data_test$Expo==0)] <- mediana_expo
+
+data_test <- data_test %>% mutate(Expo_Cat =cut(Expo, qntExpo), Carne_Cat=cut(Carne, qntCarne), Veh_cdin_Cat = cut(Veh_cdin, qntVeh_cdin), of_var = log(data_test$Expo/365.25))
+```
+
+
+```{r}
+p.NB.log.test <- predict.glm(object = selec, newdata = data_test , type="response" )
+hist(p.NB.log.test)
+
+# APARECEN NAs. COMO ESTAMOS HASTA LA POLLA, ASIGNAMOS LA MEDIANA
+
+indices_na <- which(is.na(p.NB.log.test))
+p.NB.log.test[indices_na] <- mean(p.NB.log.test, na.rm=T)
+
+ec <- function(prediccion, observado){
+  sum((prediccion-observado)^2)
+}
+
+ea <- function(prediccion, observado){
+  sum(abs(prediccion-observado))
+}
+
+ecm <- function(prediccion, observado){
+  sum((prediccion-observado)^2)/dim(test_data)[1]
+}
+
+#ec(p.NB.log.test, test_data$N_totales)
+#ea(p.NB.log.test, test_data$N_totales)
+#ecm(p.NB.log.test, test_data$N_totales)
+```
+
+
+```{r}
+data_test <- data_test %>% mutate(Preds = p.NB.log.test)
+```
+
+
+
+
+```{r}
+save(data_test, file='./Predicciones.RData')
+```
+
+
+
+## TARIFICACIÓN 
+
+```{r}
+coste_medio <- (sum(data$C_rcmat_agregado) + sum(data$C_rccorp)) / (sum(data$N_rccorp)+sum(data$N_rcmat))
+data_test <- data_test %>% mutate(ant_compni_cat = cut(ant_compnia, breaks=c(-1,2,4,9,50), labels=c(0,1,4,7)))
+
+data_test <- data_test %>%  mutate(prima = coste_medio*(0.85+Preds) + 100 - 10*ant_compnia )
+```
+
+
+```{r}
+data_test$Prima <- data_test$prima
+data_test$Exp_num_total_reclama <- data_test$Preds
+data_test <- data_test %>% dplyr::select(-prima, -Preds) 
+```
+
+
+```{r}
+resultados <- data_test %>% dplyr::select(poliza, Exp_num_total_reclama, Prima)
+
+write.csv(resultados, file='./resultados.csv', row.names = F)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
