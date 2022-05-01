@@ -23,6 +23,12 @@ library(insurancerating)
 library(stats)
 library(caret)
 library(pscl)
+library(arules)
+library(rsample)
+library(MASS)
+library(regclass)
+
+
 ```
 
 # Carga de datos y preprocesado
@@ -187,7 +193,6 @@ Probamos a modelar el número total de reclamaciones con una binomial negativa, 
 
 
 ```{r}
-library(rsample)
 data3 <- data2 
 #data4 <- data3 %>% dplyr::select(-poliza,-Edad,-Carne,-fini,-fvto,-Veh_cdin,-Veh_val,-Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,-fpag,-Edad_Cat,-veh_ant,-Cus_des,-b7_puertas,-Veh_val_Cat,-clase_veh,-Tipo_veh-Expo)
 data4 <- data3 %>% dplyr::mutate(N_totales = N_rcmat + N_rccorp) %>%
@@ -223,7 +228,6 @@ test_data <- testing(particion)
 ```{r}
 # CREAMOS EL MODELO CON TODO Y HACEMOS UN STEP
 
-library(MASS)
 # usamos una variable de offset que será el logaritmo del tiempo de exposición de la poliza
 of_var <- log(train_data$Expo/365.25)
 train_data <- train_data %>% dplyr::select(-Expo)
@@ -261,7 +265,6 @@ summary(selec)
 
 No hay problemas de colinealidad
 ```{r}
-library(regclass)
 VIF(selec)
 ```
 
@@ -300,7 +303,7 @@ ecm(p.NB.log, test_data$N_totales)
 
 ```{r}
 library(readxl)
-data_test <- read_excel("data/base_challenge.xlsx", sheet = "Test")
+data_test <- read_excel("./data/base_challenge.xlsx", sheet = "Test")
 #View(data_test)
 ```
 
@@ -360,8 +363,28 @@ save(data_test, file='./Predicciones.RData')
 
 
 
+## Segmentación previa tarificación
+
+
+Cargamos la predicciones:
+
+
+
+```{r}
+load('./Predicciones.RData')
+```
+
+
+```{r}
+discr<-discretize(x=data_test$Preds, method="frequency",labels = 1:10, breaks=10, ordered=TRUE)
+data_test$intervalo_tarif<- discr
+table(discr)
+
+```
+
 ## TARIFICACIÓN 
 
+Esta es la tarificación antigua (antes del 1 de mayo):
 ```{r}
 coste_medio <- (sum(data$C_rcmat_agregado) + sum(data$C_rccorp)) / (sum(data$N_rccorp)+sum(data$N_rcmat))
 data_test <- data_test %>% mutate(ant_compni_cat = cut(ant_compnia, breaks=c(-1,2,4,9,50), labels=c(0,1,4,7)))
@@ -384,9 +407,31 @@ write.csv(resultados, file='./resultados.csv', row.names = F)
 ```
 
 
+Nueva tarificación (1 de mayo):
+
+Hemos hecho segmentos y ahora le asignamos unos precios a ojo a estos segmentos, siendo los de los últimos segmentos, claramente prohibitivos.  
+
+```{r}
+#vector de precios
+correspondencia_precios<-c(100,150,200,250,300,500,800,1000,1800,2000)
+names(correspondencia_precios)<-1:10
+correspondencia_precios
+
+```
 
 
+```{r}
+for (i in 1:10){
+  data_test$Prima[data_test$intervalo_tarif==i]<-correspondencia_precios[i]
+}
+```
 
+
+```{r}
+resultados <- data_test %>% dplyr::select(poliza, Exp_num_total_reclama, Prima)
+
+write.csv(resultados, file='./resultados_1mayo.csv', row.names = F)
+```
 
 
 
