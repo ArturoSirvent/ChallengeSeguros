@@ -200,7 +200,7 @@ data4 <- data3 %>% dplyr::mutate(N_totales = N_rcmat + N_rccorp) %>%
                               -Edad,-Carne,
                               -fini,-fvto,
                               -Veh_cdin,-Veh_val,
-                              -Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,
+                              -Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rccorp,
                               -Edad_Cat,
                               -veh_ant,-Cus_des,-clase_veh,-Tipo_veh)
 
@@ -362,6 +362,10 @@ save(data_test, file='./Predicciones.RData')
 ```
 
 
+```{r}
+plot(p.NB.log, test_data$N_totales)
+```
+
 
 ## Segmentación previa tarificación
 
@@ -381,6 +385,20 @@ data_test$intervalo_tarif<- discr
 table(discr)
 
 ```
+### PREDICCION Random Forest
+```{r}
+library(randomForest)
+
+
+rf <- randomForest(factor(N_totales) ~ .-Veh_marca,data=train_data, proximity=TRUE,ntree=200)
+print(rf)
+```
+
+```{r}
+p1 <- predict(rf, test_data)
+confusionMatrix(p1, factor(test_data$N_totales))
+```
+
 
 ## TARIFICACIÓN 
 
@@ -444,7 +462,7 @@ write.csv(resultados, file='./resultados_1mayo.csv', row.names = F)
 
 
 
-
+ 
 
 
 
