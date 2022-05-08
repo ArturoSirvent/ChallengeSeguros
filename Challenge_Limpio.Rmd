@@ -27,7 +27,7 @@ library(arules)
 library(rsample)
 library(MASS)
 library(regclass)
-
+library(randomForest)
 
 ```
 
@@ -95,6 +95,7 @@ esperados <- round(dpois(0:4,mean(data3$N_rcmat)),3)
 cbind(obs,esperados)
 ```
 
+
 Comprobamos que claramente es una poisson.
 ```{r}
 siniestros <- data3%>% group_by(N_rcmat)%>% summarise(observados=n()/dim(data3)[1])
@@ -104,7 +105,7 @@ siniestros %>% ggplot()+geom_col(aes(x=N_rcmat,y=observados),color="blue",fill="
   geom_col(aes(x=N_rcmat,y=esperados),color="red",fill="red",alpha=0.1)
 ```
 
-También podría ser una binomial negativa perfectamente. De hecho, visulamente parece que ajusta un poco mejor con la binomial negativa que con la poisson. Además, en la tabla anterior comprobabamos como existía un poco de exceso de ceros con respecto a lo esperado.
+También podría ser una binomial negativa perfectamente. De hecho, visualmente parece que ajusta un poco mejor con la binomial negativa que con la poisson. Además, en la tabla anterior comprobabamos como existía un poco de exceso de ceros con respecto a lo esperado.
 ```{r}
 fit.bn <- goodfit(data3$N_rcmat,type = "nbinomial", method="MinChisq")
 
@@ -200,7 +201,7 @@ data4 <- data3 %>% dplyr::mutate(N_totales = N_rcmat + N_rccorp) %>%
                               -Edad,-Carne,
                               -fini,-fvto,
                               -Veh_cdin,-Veh_val,
-                              -Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rccorp,
+                              -Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,
                               -Edad_Cat,
                               -veh_ant,-Cus_des,-clase_veh,-Tipo_veh)
 
@@ -223,6 +224,8 @@ particion <- initial_split(data4,prop = 2/3, strata = N_totales) # particion ale
 train_data <- training(particion)
 test_data <- testing(particion)
 ```
+
+
 
 
 ```{r}
@@ -362,10 +365,6 @@ save(data_test, file='./Predicciones.RData')
 ```
 
 
-```{r}
-plot(p.NB.log, test_data$N_totales)
-```
-
 
 ## Segmentación previa tarificación
 
@@ -385,43 +384,29 @@ data_test$intervalo_tarif<- discr
 table(discr)
 
 ```
-### PREDICCION Random Forest
-```{r}
-library(randomForest)
-
-
-rf <- randomForest(factor(N_totales) ~ .-Veh_marca,data=train_data, proximity=TRUE,ntree=200)
-print(rf)
-```
-
-```{r}
-p1 <- predict(rf, test_data)
-confusionMatrix(p1, factor(test_data$N_totales))
-```
-
 
 ## TARIFICACIÓN 
 
 Esta es la tarificación antigua (antes del 1 de mayo):
 ```{r}
-coste_medio <- (sum(data$C_rcmat_agregado) + sum(data$C_rccorp)) / (sum(data$N_rccorp)+sum(data$N_rcmat))
-data_test <- data_test %>% mutate(ant_compni_cat = cut(ant_compnia, breaks=c(-1,2,4,9,50), labels=c(0,1,4,7)))
-
-data_test <- data_test %>%  mutate(prima = coste_medio*(0.85+Preds) + 100 - 10*ant_compnia )
+# coste_medio <- (sum(data$C_rcmat_agregado) + sum(data$C_rccorp)) / (sum(data$N_rccorp)+sum(data$N_rcmat))
+# data_test <- data_test %>% mutate(ant_compni_cat = cut(ant_compnia, breaks=c(-1,2,4,9,50), labels=c(0,1,4,7)))
+# 
+# data_test <- data_test %>%  mutate(prima = coste_medio*(0.85+Preds) + 100 - 10*ant_compnia )
 ```
 
 
 ```{r}
-data_test$Prima <- data_test$prima
-data_test$Exp_num_total_reclama <- data_test$Preds
-data_test <- data_test %>% dplyr::select(-prima, -Preds) 
+# data_test$Prima <- data_test$prima
+# data_test$Exp_num_total_reclama <- data_test$Preds
+# data_test <- data_test %>% dplyr::select(-prima, -Preds) 
 ```
 
 
 ```{r}
-resultados <- data_test %>% dplyr::select(poliza, Exp_num_total_reclama, Prima)
-
-write.csv(resultados, file='./resultados.csv', row.names = F)
+# resultados <- data_test %>% dplyr::select(poliza, Exp_num_total_reclama, Prima)
+# 
+# write.csv(resultados, file='./resultados.csv', row.names = F)
 ```
 
 
@@ -431,10 +416,19 @@ Hemos hecho segmentos y ahora le asignamos unos precios a ojo a estos segmentos,
 
 ```{r}
 #vector de precios
-correspondencia_precios<-c(100,150,200,250,300,500,800,1000,1800,2000)
+correspondencia_precios<-c(8,15,50,150,300,500,800,1000,1800,2000)
 names(correspondencia_precios)<-1:10
 correspondencia_precios
+```
 
+
+```{r}
+# q <- sort(resultados$Exp_num_total_reclama)
+# 
+# q[13374]
+# max(q)
+#which(is.na(resultados))
+#length(resultados$Preds)
 ```
 
 
@@ -446,9 +440,9 @@ for (i in 1:10){
 
 
 ```{r}
-resultados <- data_test %>% dplyr::select(poliza, Exp_num_total_reclama, Prima)
+resultados <- data_test %>% dplyr::select(poliza, Preds, Prima)
 
-write.csv(resultados, file='./resultados_1mayo.csv', row.names = F)
+write.csv(resultados, file='./resultados_8mayo.csv', row.names = F)
 ```
 
 
@@ -462,7 +456,7 @@ write.csv(resultados, file='./resultados_1mayo.csv', row.names = F)
 
 
 
- 
+
 
 
 
