@@ -1,0 +1,415 @@
+---
+title: "Estimación de precios para una cartera de seguros"
+author: "Arturo Sirvent Fresneda"
+date: "14/5/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Este informe resumen los resultados finales de la modelización de una cartera de seguros, y su correspondiente tarificación para la asignatura Ciencia de Datos en Negocio, del Máster en Ciencia de Datos (UV) a 14 mayo de 2022.    
+El trabajo se ha llevado a cabo en grupo. Autores: Arturo Sirvent, Francisco Olayo, Miguel Hortelano, Angel Guevara.  
+
+# Carga y preprocesado de los datos  
+
+```{r}
+#cargamos las librerias
+library(readxl)
+library(ggplot2)
+library(stats)
+library(dplyr)
+library(vcd)
+library(glmnet)
+library(stats)
+library(caret)
+library(pscl)
+library(arules)
+library(rsample)
+library(MASS)
+library(regclass)
+library(randomForest)
+```
+
+
+Preparamos los datos, filtramos aquellos sin sentido o que juzgamos sospechosos, y pasamos algunas variables a factor.
+
+```{r}
+
+data <- read_excel("./data/base_challenge.xlsx") %>% 
+  filter( Veh_val > 0, Edad < 100) %>%  #quitamos las edades mayores a 100 y los valores de vehiculo negativos
+  dplyr::select(-C_postal, -C_rcmat_culpa, -C_rcmat_inoc) #vamos a modelar el número de reclamaciones, por ello eliminamos el coste de las mismas.
+  
+
+#algunas variables son factores
+data$fpag <- factor(data$fpag, labels = c('Anual efectivo', 'Anual domiciliado',"semestral esfectivo", "semestral 1ºp efectivo", "semestral domiciliado"))
+#data$C_postal <- factor(data$C_postal)
+data$Veh_marca <- factor(data$Veh_marca)
+data$Veh_cuso <- factor(data$Veh_cuso)#codificado en dos valores , 3 y 4. Pero no sabemos las etiquetas
+data$Veh_comb <- factor(data$Veh_comb)
+data$Cus_des <- factor(data$Cus_des)
+data$b7_puertas <- factor(data$b7_puertas, ordered = TRUE)
+```
+
+El hecho de modelar el número de reclamaciones y no el coste de las mismas, es uan decisión que se hace a priori, pero la elección contraria podría justificarse como válida igualmente.  
+
+```{r}
+#hacemos un resumen de los datos, a ver si todo esta correcto
+str(data)
+summary(data)
+```
+
+
+```{r}
+# Función que discretiza en cuantiles
+quantbreaks <- function(predictor,cortes=10,cuantiles=F){
+  qnt <- quantile(predictor,probs=seq(0,1,1/cortes),include.lowest=T)
+  qnt[1] <- qnt[1]-0.01
+  qnt[cortes] <- qnt[cortes]+0.01 
+  
+  if(cuantiles){return(qnt)}                # devuelve cortes 
+    else{return(cut(predictor,breaks=qnt))} # devuelve var discretizada
+}
+```
+
+Hemos definido una función que nos ayuda a discretizar variables numéricas, y asi poder categorizarla y reducir la variabilidad del modelo. Así lo hacemos más robusto al ruido (pues literalmente estamos reduciendo los posibles inputs, definiendo de forma más certera los outputs).
+```{r}
+data2 <- data #vamos a modificar una copia de los datos originales
+#segun la variable, definimos un numero diferente de cortes, pero tras unas pruebas, decidimos realizar 10 cortes en la mayoria.
+data2 <- data2 %>% mutate(Edad_Cat = quantbreaks(data$Edad, cortes=10), Expo_Cat =quantbreaks(data$Expo, cortes=10), 
+                 Carne_Cat=quantbreaks(data$Carne, cortes=10), Veh_cdin_Cat = quantbreaks(data$Veh_cdin, cortes=5), 
+                 Veh_val_Cat=quantbreaks(data$Veh_val, cortes=10))
+
+# Añadimos una columna con la suma de reclamaciones, pues será esta suma la que el modelo intentará predecir.
+data3 <- data2 %>% dplyr::mutate(N_totales = N_rcmat + N_rccorp)
+```
+
+
+Ahora que tenemos los datos preparados, podemos proceder a definir el modelo que realizará la estimación. 
+
+
+
+# Elección del modelo
+
+
+## Distribución de la variable respuesta  
+
+Observamos que si modelamos la variable de reclamacions materiales `N_rcmat` con una distribución de poisson, no existe exceso de ceros en la variable.
+```{r}
+obs <- data3 %>% group_by(N_rcmat=N_rcmat) %>% 
+  summarise(observados=round(n()/24995,3))
+esperados <- round(dpois(0:4,mean(data3$N_rcmat)),3)
+cbind(obs,esperados)
+```
+
+
+Representado los datos mediante barras con la altura de la frecuencia esperada y observada, vemos que puede ser una poisson, pues superponen ambas.
+```{r}
+siniestros <- data3%>% group_by(N_rcmat)%>% summarise(observados=n()/dim(data3)[1])
+siniestros <- siniestros%>% mutate(esperados=dpois(N_rcmat,lambda = mean(data3$N_rcmat)))
+
+siniestros %>% ggplot()+geom_col(aes(x=N_rcmat,y=observados),color="blue",fill="blue",alpha=0.1)+
+  geom_col(aes(x=N_rcmat,y=esperados),color="red",fill="red",alpha=0.1)+ylab("Observado y Esperado")
+```
+
+Sin embargo, también podría ser una binomial negativa. De hecho, visualmente parece que ajusta un poco mejor con la binomial negativa que con la poisson.   
+```{r}
+fit.bn <- goodfit(data3$N_rcmat,type = "nbinomial", method="MinChisq")
+
+# goodfit essentially computes the fitted values of a discrete distribution (either Poisson, 
+# binomial or negative binomial) to the count data given in x. If the parameters are not specified # they are estimated either by ML or Minimum Chi-squared.
+
+negbinData <- data.frame(N_rcmat=0:4,
+                         observados=fit.bn$observed/dim(data3)[1], 
+                         esperados=fit.bn$fitted/dim(data3)[1])
+negbinData
+
+negbinData%>% ggplot +
+  geom_col(aes(x=N_rcmat,y=observados),color="blue",fill="blue",alpha=0.1) +
+  geom_col(aes(x=N_rcmat,y=esperados),color="red",fill="red",alpha=0.05)+ylab("Observado y Esperado")
+```
+
+Con la binomial negativa se produce un ajuste más fino a las frecuencias esperadas.  
+
+Al estudiar la distribución de la variable `N_rccorp`, vemos un buen ajuste a una distribución de poisson.  
+```{r}
+obs <- data3 %>% group_by(N_rccorp=N_rccorp) %>% 
+  summarise(observados=round(n()/24995,3)) #24995 porque es el numero total de polizas consideradas 
+esperados <- round(dpois(0:2,mean(data3$N_rccorp)),3)
+cbind(obs,esperados)
+```
+Y de forma gráfica se ve claro la superposición entre observado y esperado.  
+```{r}
+siniestros <- data3%>% group_by(N_rccorp)%>% summarise(observados=n()/dim(data3)[1])
+siniestros <- siniestros%>% mutate(esperados=dpois(N_rccorp,lambda = mean(data3$N_rccorp)))
+
+siniestros %>% ggplot()+geom_col(aes(x=N_rccorp,y=observados),color="blue",fill="blue",alpha=0.1)+
+  geom_col(aes(x=N_rccorp,y=esperados),color="red",fill="red",alpha=0.1)+ylab("Observado y Esperado")
+```
+
+Sin embargo, hemos decidido que vamos a predecir la variable respuesta `N_totales` que son las reclamaciones totales, independientemente de su naturaleza.  
+Comprobamos que sí existe un exceso de ceros en la variable suma `N_rcmat + N_rccorp`.  
+```{r}
+obs <- data3 %>% group_by(N_totales=N_totales) %>% 
+  summarise(observados=round(n()/24995,3))
+esperados <- round(dpois(0:5,mean(data3$N_totales)),3)
+cbind(obs,esperados)
+
+siniestros <- data3%>% group_by(N_totales)%>% summarise(observados=n()/dim(data3)[1])
+siniestros <- siniestros%>% mutate(esperados=dpois(N_totales,lambda = mean(data3$N_totales)))
+
+siniestros %>% ggplot()+geom_col(aes(x=N_totales,y=observados),color="blue",fill="blue",alpha=0.1)+
+  geom_col(aes(x=N_totales,y=esperados),color="red",fill="red",alpha=0.1)+ylab("Observado y Esperado")
+```
+
+Debido a la posibilidad de un exceso de ceros en la variable respueta `N_totales`, podría hacer falta usar un modelo para corregir dicho exceso. 
+
+Hemos comenzado planteando un modelo de Poisson, pero también sería conveniente probar alguno con inflación de ceros como la binomial negativa.
+
+Otra opción podría ser usar otro tipo de modelos como modelos de mezcla (hurdle: modeliza los ceros con una bernouilli y el resto de valores con una poisson truncada. Útil cuando hay muchos o pocos ceros), árboles de decisión, bagging,... pero lo plantearemos en el futuro si las opciones más sencillas no resultan.
+
+
+Comparamos con la distribución de binomial negativa.
+```{r}
+fit.bn <- goodfit(data3$N_totales,type = "nbinomial", method="MinChisq")
+negbinData <- data.frame(N_totales=0:5,
+                         observados=fit.bn$observed/dim(data3)[1], 
+                         esperados=fit.bn$fitted/dim(data3)[1])
+
+negbinData%>% ggplot +
+  geom_col(aes(x=N_totales,y=observados),color="blue",fill="blue",alpha=0.1) +
+  geom_col(aes(x=N_totales,y=esperados),color="red",fill="red",alpha=0.05)+ylab("Observado y Esperado")
+```
+Vemos que cuando usamos la suma de reclamaciones, la distribución se ajusta muy bien a una binomial negativa. Esta distribución es capaz de tener en cuenta ese ligero exceso de ceros, y por ello usaremos para modelizar la binomial negativa.
+
+
+Para cada uno de los posibles modelos que podamos elegir, habrá que decidir si le metemos la variable de offset o no. Otro de los aspectos que tenemos que decidir, es si usar regularización o no. Esto puede ser útil para evitar el sobreajuste si nos encontramos en dicho caso (modelos LASSO, RIDGE, ELASTICNET).
+
+Se probarán diferentes cosas, y al final nos quedaremos con el que mejor resultados nos dé.
+
+## Construcción del modelo  
+
+Probamos a modelar el número total de reclamaciones con una binomial negativa, ya que hemos visto que sigue prácticamente dicha distribución.
+
+
+```{r}
+data3 <- data2 #copiamos los datos para modificarlos sin sobreescribir
+
+#quitamos las variables numéricas que hemos categorizado y algunas mas que no consideramos que aporten al modelo
+data4 <- data3 %>% dplyr::mutate(N_totales = N_rcmat + N_rccorp) %>%
+                  dplyr::select(-poliza,
+                              -Edad,-Carne,
+                              -fini,-fvto,
+                              -Veh_cdin,-Veh_val,
+                              -Veh_peso,-Veh_cuso,-N_rcmat,-N_rccorp,-N_culpa,-N_inoc,-C_rcmat_agregado,-C_rccorp,
+                              -Edad_Cat,
+                              -veh_ant,-Cus_des,-clase_veh,-Tipo_veh)
+
+
+#pruebas de discretizacion descartadas
+#discretizamos en teniendo en cuenta la función objetivo
+#library(OneR)
+#var.num.disc <- optbin(formula=N_totales~Edad+Carne+Veh_cdin+Veh_val, data=data4, method = c("logreg"))
+#var.num.disc <- var.num.disc %>% dplyr::select(-N_totales)
+#data4[,names(var.num.disc)] <- var.num.disc
+```
+
+
+Vamos a añadir un offset al modelo, pues la exposición de las pólizas no es constante, y cada una tiene una duración diferente, esto se debe tener en cuenta si o si, porque una póliza que dure el doble, tendrá mayor probabilidad de accidente.  
+Además hay algunas pólizas con una exposición / duración de 0, esto dará error en el modelo pues se toma el logaritmo del offset. Para remediarlo imputamos dichas pólizas con la media de exposición del resto.
+```{r}
+# Sustituimos los valores con Expo cero por la media de exposición 
+mediana_expo <- median(data4$Expo)
+data4$Expo[which(data4$Expo==0)] <- mediana_expo
+```
+
+Hacemos una separación de los datos en train y test.
+```{r}
+set.seed(1500)
+particion <- initial_split(data4,prop = 2/3, strata = N_totales) # particion aleatoria 
+train_data <- training(particion)
+test_data <- testing(particion)
+```
+
+
+
+
+```{r}
+# CREAMOS EL MODELO CON TODO Y HACEMOS UN STEP
+
+# usamos una variable de offset que será el logaritmo del tiempo de exposición de la poliza
+of_var <- log(train_data$Expo/365.25)
+train_data <- train_data %>% dplyr::select(-Expo)
+
+NB.log <- glm.nb(N_totales~.+offset(of_var) ,data=train_data,link="log",control=glm.control(maxit=150))
+summary(NB.log)
+
+# Eliminamos la marca del vehículo por ser muy poco significativa 
+NB.log <- update(NB.log, ~. -Veh_marca)
+summary(NB.log)
+```
+
+Hemos creado un modelo con las variables que creíamos más importantes, y lo hemos corregido según la relevancia que el modelo le asigna a cada una, pero este proceso se puede complicar mucho. Por eso vamos a recurrir a la automatización que nos proporciona R mediante la función `step()`, que prueba diferentes combinaciones de variables.   
+
+```{r}
+# BUSCAMOS UN STEP PARA BUSCAR EL MEJOR MODELO 
+
+selec <- step(NB.log, direction='both', trace=1)
+
+```
+
+```{r}
+#resumen del mejor modelo encontrado
+summary(selec)
+```
+
+
+
+Tras muchas pruebas, nos damos cuenta que añadir el `Score2` como término cúbico mejora el modelo.
+
+```{r}
+selec <- update(selec, ~. + I(Score2^3))
+summary(selec)
+```
+
+Es bien sabido que la colinealidad entre variables predictoras en los modelos lineales, puede derivar en inestabilidades de los resultados, pues se supone que dichas variables aportan efectos independientes a la variable respuesta. 
+```{r}
+#vamos a comprobar si existe colinealidad entre variables predictoras mediante el test VIF
+
+VIF(selec)
+
+```
+
+
+Ahora que tenemos un modelo, vamos a realizar una predicción sobre el conjunto de test.  
+```{r}
+test_data <- test_data %>% mutate(of_var = log(test_data$Expo/365.25))
+test_data <- test_data %>% dplyr::select(-Expo)
+
+p.NB.log <- predict.glm(object = selec, newdata = test_data , type="response" )
+hist(p.NB.log)
+
+ec <- function(prediccion, observado){
+  sum((prediccion-observado)^2)
+}
+
+ea <- function(prediccion, observado){
+  sum(abs(prediccion-observado))
+}
+
+ecm <- function(prediccion, observado){
+  sum((prediccion-observado)^2)/dim(test_data)[1]
+}
+
+resultados<-data.frame(error_cuadratico=ec(p.NB.log, test_data$N_totales),error_absoluto=ea(p.NB.log, test_data$N_totales)
+                       , error_cuadratico_medio=ecm(p.NB.log, test_data$N_totales))
+resultados
+```
+
+Con esto podemos obtener unos errores y valores que nos han servido para comprar entre distintos modelos. A menor error, más precisa la predicción. 
+
+
+Nosotros hemos separado un conjunto como test, pero las predicciones finales las debemos realizar sobre un conjunto de datos del que NO tenemos la variables respuesta, esto sería igual que el proceso de 'desplegar' un modelo, donde se pone en producción para datos con los que ya no podemos confirmar que tal lo ha hecho, pues no tenemos las respuestas (`y_true`). Para hacer la predicción final vamos a entrenar el modelo con todos los datos disponibles y no solo 2/3 como hemos hecho antes.
+
+
+```{r}
+#aqui falta enternar el modelo con TODOS LOS DATOS y tal ??
+```
+
+
+## Predicciones finales
+
+Cargamos los datos a predecir y obtenemos la estimación de siniestros para las pólizas.
+
+```{r}
+#cargamos los datos
+library(readxl)
+data_test <- read_excel("./data/base_challenge.xlsx", sheet = "Test")
+#View(data_test)
+```
+
+```{r}
+# Creamos las variables categóricas para el conjunto de test también. Solo lo hacemos para aquellas que están incluidas en el modelo.
+
+# Primero replicamos los niveles de las variables categóricas usadas en el modelo durante el entrenamiento. 
+
+qntExpo <- quantbreaks(data$Expo, cortes=10,cuantiles=T)
+qntCarne <- quantbreaks(data$Carne, cortes=4, cuantiles=T) #en el train este este era 10 no ??
+qntVeh_cdin <- quantbreaks(data$Veh_cdin, cortes=5, cuantiles=T)
+
+mediana_expo <- median(data_test$Expo)
+data_test$Expo[which(data_test$Expo==0)] <- mediana_expo
+
+data_test <- data_test %>% mutate(Expo_Cat =cut(Expo, qntExpo), Carne_Cat=cut(Carne, qntCarne), Veh_cdin_Cat = cut(Veh_cdin, qntVeh_cdin), of_var = log(data_test$Expo/365.25))
+```
+
+
+```{r}
+#usamos el modelo previamente entrenado
+p.NB.log.test <- predict.glm(object = selec, newdata = data_test , type="response" )
+hist(p.NB.log.test)
+
+# APARECEN NAs. para lidiar con estos errores puntuales, asignamos la media. Esta decisión es arriesgada y no debería tenerse NUNCA
+# como un procedimiento estándar. En este caso, evaluando manualmente las pólizas, consideramos que no hay mucho riesgo en tomar dicha decisión.
+
+indices_na <- which(is.na(p.NB.log.test))
+p.NB.log.test[indices_na] <- mean(p.NB.log.test, na.rm=T)
+```
+
+
+```{r}
+#anadimos la predicción al dataframe
+data_test <- data_test %>% mutate(Preds = p.NB.log.test)
+```
+
+```{r}
+#y guardamos el dataframe para no tener que repetir todo el proceso por si cerramos el RStudio.
+save(data_test, file='./Predicciones.RData')
+```
+
+## Tarificación
+
+Ahora solo nos queda realizar la tarificación de precios. Este proceso lo hemos ido cambiando con el tiempo, conforme se competía con los otros equipos respecto a obtener los mejores precios para las mejores pólizas.  
+
+Nuestra estrategia ha consistido en no arriesgar con pólizas posiblemente problemáticas, y asegurar las más seguras con precios muy bajos.  
+Los precios los hemos puesto manualmente a tramos de igual cantidad de pólizas.  
+
+```{r}
+#cargamos las predicciones en caso de que haga falta
+load('./Predicciones.RData')
+```
+
+Y ordenamos en 10 tramos a las diferentes pólizas según su riesgo.  
+```{r}
+discr<-discretize(x=data_test$Preds, method="frequency",labels = 1:10, breaks=10, ordered=TRUE)
+data_test$intervalo_tarif<- discr
+table(discr)
+
+```
+
+Hemos hecho segmentos y ahora le asignamos unos precios a ojo a estos segmentos, siendo los de los últimos segmentos, claramente prohibitivos.  
+
+```{r}
+#vector de precios
+correspondencia_precios<-c(8,15,50,150,300,500,800,1000,1800,2000)
+names(correspondencia_precios)<-1:10
+correspondencia_precios
+```
+
+
+```{r}
+#añadimos los precios al dataset
+for (i in 1:10){
+  data_test$Prima[data_test$intervalo_tarif==i]<-correspondencia_precios[i]
+}
+```
+
+Y finalmente guardamos los resultados. 
+```{r}
+resultados <- data_test %>% dplyr::select(poliza, Preds, Prima)
+
+write.csv(resultados, file='./resultados.csv', row.names = F)
+```
+
