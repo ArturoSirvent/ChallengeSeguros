@@ -2,7 +2,9 @@
 title: "Estimación de precios para una cartera de seguros"
 author: "Francisco Olayo González, Ángel Guevara, Miguel Hortelano y Arturo Sirvent"
 date: "14/5/2022"
-output: html_document
+output: 
+  html_document:
+    toc: true
 ---
 
 ```{r setup, include=FALSE}
@@ -15,7 +17,7 @@ El trabajo se ha llevado a cabo en grupo. Autores: Arturo Sirvent, Francisco Ola
 
 # Carga y preprocesado de los datos  
 
-```{r}
+```{r, warning = F, message = F}
 #cargamos las librerias
 library(readxl)
 library(ggplot2)
@@ -523,7 +525,7 @@ table(discr)
 
 ```
 
-Hemos hecho segmentos y ahora le asignamos unos precios a ojo a estos segmentos, siendo los de los últimos segmentos, claramente prohibitivos.  
+Hemos hecho segmentos y ahora le asignamos unos precios a ojo a estos segmentos, siendo los de los últimos segmentos, claramente prohibitivos para que aquellas pólizas que juzgamos más peligrosas recaigan en la competencia.  
 
 ```{r}
 #vector de precios
