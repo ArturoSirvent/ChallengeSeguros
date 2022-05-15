@@ -542,10 +542,11 @@ for (i in 1:10){
 }
 ```
 
+
 Y finalmente guardamos los resultados. 
 ```{r}
 resultados <- data_test %>% dplyr::select(poliza, Preds, Prima)
 
-write.csv(resultados, file='./resultados.csv', row.names = F)
+write.csv(resultados, file='./resultados_15mayo.csv', row.names = F)
 ```
 
