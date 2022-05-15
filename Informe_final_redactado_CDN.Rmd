@@ -1,6 +1,6 @@
 ---
 title: "Estimación de precios para una cartera de seguros"
-author: "Arturo Sirvent Fresneda"
+author: "Francisco Olayo González, Ángel Guevara, Miguel Hortelano y Arturo Sirvent"
 date: "14/5/2022"
 output: html_document
 ---
@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
-Este informe resumen los resultados finales de la modelización de una cartera de seguros, y su correspondiente tarificación para la asignatura Ciencia de Datos en Negocio, del Máster en Ciencia de Datos (UV) a 14 mayo de 2022.    
+Este informe resume los resultados finales de la modelización de una cartera de seguros, y su correspondiente tarificación para la asignatura Ciencia de Datos en Negocio, del Máster en Ciencia de Datos (UV) a 14 mayo de 2022.    
 El trabajo se ha llevado a cabo en grupo. Autores: Arturo Sirvent, Francisco Olayo, Miguel Hortelano, Angel Guevara.  
 
 # Carga y preprocesado de los datos  
@@ -31,6 +31,7 @@ library(rsample)
 library(MASS)
 library(regclass)
 library(randomForest)
+library(reshape2)
 ```
 
 
@@ -53,14 +54,13 @@ data$Cus_des <- factor(data$Cus_des)
 data$b7_puertas <- factor(data$b7_puertas, ordered = TRUE)
 ```
 
-El hecho de modelar el número de reclamaciones y no el coste de las mismas, es uan decisión que se hace a priori, pero la elección contraria podría justificarse como válida igualmente.  
+El hecho de modelar el número de reclamaciones y no el coste de las mismas, es una decisión que se hace a priori, pero la elección contraria podría justificarse como válida igualmente.  
 
 ```{r}
 #hacemos un resumen de los datos, a ver si todo esta correcto
 str(data)
 summary(data)
 ```
-
 
 ```{r}
 # Función que discretiza en cuantiles
@@ -75,6 +75,7 @@ quantbreaks <- function(predictor,cortes=10,cuantiles=F){
 ```
 
 Hemos definido una función que nos ayuda a discretizar variables numéricas, y asi poder categorizarla y reducir la variabilidad del modelo. Así lo hacemos más robusto al ruido (pues literalmente estamos reduciendo los posibles inputs, definiendo de forma más certera los outputs).
+Las divisiones de las discretizaciones se han hecho algunas atendiendo a como se distribuye la variable y otras simplemente atendiendo a lo que a nosotros nos parecía adecuado.
 ```{r}
 data2 <- data #vamos a modificar una copia de los datos originales
 #segun la variable, definimos un numero diferente de cortes, pero tras unas pruebas, decidimos realizar 10 cortes en la mayoria.
@@ -87,9 +88,117 @@ data3 <- data2 %>% dplyr::mutate(N_totales = N_rcmat + N_rccorp)
 ```
 
 
+
+# Análisis exploratorio de los datos
+
+Empezamos revisando la distribución de algunas variables.
+
+```{r}
+ggplot(data,aes(x = Score2))+geom_histogram()
+
+rep <- filter(data, Veh_val < 100000)
+
+hist(rep$Veh_val, breaks = 100) #Tenemos un valor solitario por debajo de 0, eliminar
+hist(rep$Veh_peso, breaks = 100)
+hist(data$veh_ant, breaks = 100)
+#hist(data$b7_puertas, breaks = 100)
+hist(data$b7_longitud, breaks = 100)
+hist(data$ant_compnia, breaks = 100)
+#hist(data$C_rcmat_culpa, breaks = 100)
+#hist(data$C_rcmat_inoc, breaks = 100)
+hist(data$veh_ant, breaks = 100)
+```
+
+Podemos observar como se distribuyen las variables mediante los histogramas. Vemos como por ejemplo la variable `Veh_peso` está sobre todo entre 1000 y 1500 o como la variable `Veh_val` se encuentra en torno al valor 20000, habiendo algunos datos que se separan un poco del resto llegando incluso a 100000. 
+
+Los histogramas son muy útiles también para detectar outliers que no siguen el mismo comportamiento que la mayoría de los datos.
+
+
+Distribución de variables numéricas según el número de accindentes totales.
+```{r}
+data <- data %>% dplyr::mutate(N_totales=N_rcmat+N_rccorp)
+data$N_totales <- factor(data$N_totales, ordered = TRUE)
+
+for(i in colnames(data)){
+  if(class(data[[i]]) == "numeric"){
+    a <- ggplot(data = data, aes_string(x = "N_totales", y = i, fill = "N_totales"))+geom_violin()
+    print(a)
+  }
+  
+}
+```
+
+Los gráficos de violín también son muy útiles para ver como se distribuyen las variables y para ver la existencia de grupos con respecto a una variable de estudio. En particular, hemos elegido comparar cada variable con el número de accidentes totales, que será la variable que queramos modelizar más adelante.
+
+En general, vemos como el comportamiento de la mayoría de las variables no cambia conforme aumenta el número de accidentes totales. 
+
+Además, tampoco se ve muy claro en estos casos la existencia de grupos muy definidos en las variables. Si bien es cierto, que en algunas se puede intuir un poco y darnos alguna orientación a la hora de discretizar variables si fuera necesario. Por ejemplo, vemos como en la variable `Veh_cdin` pueden existir en torno a 5-6 grupos cuando el número total de accidentes es cero. Otro ejemplo claro es la variable `veh_ant`, dónde vemos la existencia de grupos muy definidos en todos los casos de `N_totales`. Esto se debe a que es una variable numérica discreta. 
+
+En cuánto a las variables `N_rcmat` y `N_rccorp`, evidentemente vemos como su distribución va tomando valores más altos conforme aumenta el número de accidentes totales (`N_totales`).
+
+
+Mosaico de variables categóricas según número de accidentes
+```{r}
+
+for(i in colnames(data3)){
+  if(class(data3[[i]]) == "character"){
+    mosaicplot( as.formula(paste0(" ~ ", i,"+N_totales")) ,data = data3)
+  }
+  
+}
+```
+
+En los gráficos de mosaico podemos observar por ejemplo como la mayoría de los clientes usan un TURISMO como vehículo o como la mayoría de esos vehículos son tipo berlina. Esta información puede ser interesante de cara al modelo y puede servir para prestar más atención a ciertos detalles.
+
+Tablas de contingencia de variables categóricas según número de accidentes. Es la misma información que obteníamos con el gráfico de mosaico, pero en forma de tabla. Quizás en las tablas se ven más claro las diferentes categorías de cada variable.
+```{r}
+for(i in colnames(data)){
+  if(class(data[[i]]) == "character"){
+    a <- xtabs(as.formula(paste0(" ~ ", i,"+N_rcmat")) ,data = data)
+    print(a)
+  }
+  
+}
+```
+
+
+
+Ahora vemos si existen correlaciones entre las variables. Esto será interesante de cara al modelo, para no incluir dos variables que contengan la misma información y que por tanto sean redundantes.
+
+```{r}
+# matriz de correlaciones para las variables anteriores
+round(cor(data[,lapply(data,is.numeric) %>% unlist]),2)
+```
+
+También podemos ver el mismo resultado de manera gráfica.
+```{r}
+cormat <- melt(round(cor(data[,lapply(data,is.numeric) %>% unlist]),2))
+
+cormat %>% ggplot(aes(x=Var1,y=Var2,fill=value)) + geom_tile()+  
+  scale_fill_gradient(low = "white", high = "red") +
+  geom_text(aes(label = value), color = "black", size = 2) +
+  coord_fixed() + 
+  theme (axis.text.x = element_text(face="bold", colour="black",  angle = 90),
+           axis.text.y = element_text(face="bold", colour="black", hjust=0.5))
+```
+
+Tras hacer las correlaciones cruzadas entre todas las variables, observamos como hay algunas variables que están altamente correladas positivamente. Por ejemplo, `Carne` y `Edad` tienen una correlación de 0.91, cosa que es bastante y que tiene sentido, porque a mayor edad, más años de carnet en principio.
+
+Tanto la primera columna como la última fila no las tenemos en cuenta ya que hacen referencia al número de poliza, que al fin y al cabo no es más que un número que asignamos de forma aleatoria a los clientes. 
+
+La matriz de correlaciones da pie a eliminar algunas variables de cara al entrenamiento del modelo. Las decisiones que hemos tomado son las siguientes: 
+
+* Existe una alta correlación entre `Edad` y `Carne`. Nos quedamos con la variable `Carne` ya que nos parece más informativa en algunos casos. Por ejemplo, se puede dar el caso de una persona mayor que tenga pocos años de carnet (aunque no es lo común). Sin embargo, si tienes muchos años de carnet, por lo general vas a ser una persona de mayor edad.
+
+
+* También hay mucha correlación entre las variables `Veh_cdin` y `Veh_peso`. En este caso decidimos quedarnos con las potencia por encima del peso. 
+
+
+* De igual forma, `Veh_peso` y `b7_longitud` están altamente correladas. Nos quedaremos con la longitud del coche en este caso ya que antes hemos desechado el peso.
+
+* Por último, hay una gran correlación entre la antigüedad en la compañía (`ant_compnia`) y la antigüedad del vehículo (`veh_ant`). En este caso, decidimos quedarnos con la `ant_compnia` ya que nos parece más informativa.
+
 Ahora que tenemos los datos preparados, podemos proceder a definir el modelo que realizará la estimación. 
-
-
 
 # Elección del modelo
 
@@ -193,7 +302,6 @@ Se probarán diferentes cosas, y al final nos quedaremos con el que mejor result
 
 Probamos a modelar el número total de reclamaciones con una binomial negativa, ya que hemos visto que sigue prácticamente dicha distribución.
 
-
 ```{r}
 data3 <- data2 #copiamos los datos para modificarlos sin sobreescribir
 
@@ -218,7 +326,7 @@ data4 <- data3 %>% dplyr::mutate(N_totales = N_rcmat + N_rccorp) %>%
 
 
 Vamos a añadir un offset al modelo, pues la exposición de las pólizas no es constante, y cada una tiene una duración diferente, esto se debe tener en cuenta si o si, porque una póliza que dure el doble, tendrá mayor probabilidad de accidente.  
-Además hay algunas pólizas con una exposición / duración de 0, esto dará error en el modelo pues se toma el logaritmo del offset. Para remediarlo imputamos dichas pólizas con la media de exposición del resto.
+Además hay algunas pólizas con una exposición / duración de 0, esto dará error en el modelo pues se toma el logaritmo del offset. Para remediarlo imputamos dichas pólizas con la mediana de exposición del resto.
 ```{r}
 # Sustituimos los valores con Expo cero por la media de exposición 
 mediana_expo <- median(data4$Expo)
@@ -281,7 +389,24 @@ Es bien sabido que la colinealidad entre variables predictoras en los modelos li
 VIF(selec)
 
 ```
+Con el VIF, podemos ver si existe conlinealdidad entre nuestras variables. En este caso, vemos como existe una gran colinealidad entre las variables `Score2` y `Score2` al cubo. Por tanto, no podemos incluirla en el modelo.
 
+
+```{r}
+selec <- update(selec, ~. - I(Score2^3))
+summary(selec)
+```
+
+Volvemos a comprobar la colinealidad. 
+
+```{r}
+#vamos a comprobar si existe colinealidad entre variables predictoras mediante el test VIF
+
+VIF(selec)
+
+```
+
+Ahora mejor, ya no tenemos colinealidad entre nuestras variables.
 
 Ahora que tenemos un modelo, vamos a realizar una predicción sobre el conjunto de test.  
 ```{r}
@@ -313,13 +438,22 @@ Con esto podemos obtener unos errores y valores que nos han servido para comprar
 
 Nosotros hemos separado un conjunto como test, pero las predicciones finales las debemos realizar sobre un conjunto de datos del que NO tenemos la variables respuesta, esto sería igual que el proceso de 'desplegar' un modelo, donde se pone en producción para datos con los que ya no podemos confirmar que tal lo ha hecho, pues no tenemos las respuestas (`y_true`). Para hacer la predicción final vamos a entrenar el modelo con todos los datos disponibles y no solo 2/3 como hemos hecho antes.
 
+Para ello, recordemos que en la variable `data4` tenemos la versión de los datos con el preprocesado ya hecho. Por tanto, esa será la base de datos que tenemos que utilizar para entrenar el modelo final con las mejores variables para nosotros.
 
 ```{r}
-#aqui falta enternar el modelo con TODOS LOS DATOS y tal ??
+#Entrenamiento del modelo con todo el conjunto de datos.
+
+of_var <- log(data4$Expo/365.25)
+data4 <- data4 %>% dplyr::select(-Expo)
+
+NB.log.final <- glm.nb(N_totales~b7_longitud+ant_compnia+Score2+Expo_Cat+Veh_cdin_Cat+offset(of_var)                       ,data=data4,link="log",control=glm.control(maxit=150))
+summary(NB.log.final)
+
 ```
 
+Vemos que únicamente hay dos categorías de la variable `Veh_cdin_Cat` que no son significativas, pero tampoco se quedan muy lejos de serlo. Por tanto, las dejamos en el modelo.
 
-## Predicciones finales
+# Predicciones finales
 
 Cargamos los datos a predecir y obtenemos la estimación de siniestros para las pólizas.
 
@@ -336,7 +470,7 @@ data_test <- read_excel("./data/base_challenge.xlsx", sheet = "Test")
 # Primero replicamos los niveles de las variables categóricas usadas en el modelo durante el entrenamiento. 
 
 qntExpo <- quantbreaks(data$Expo, cortes=10,cuantiles=T)
-qntCarne <- quantbreaks(data$Carne, cortes=4, cuantiles=T) #en el train este este era 10 no ??
+qntCarne <- quantbreaks(data$Carne, cortes=10, cuantiles=T) 
 qntVeh_cdin <- quantbreaks(data$Veh_cdin, cortes=5, cuantiles=T)
 
 mediana_expo <- median(data_test$Expo)
@@ -348,7 +482,7 @@ data_test <- data_test %>% mutate(Expo_Cat =cut(Expo, qntExpo), Carne_Cat=cut(Ca
 
 ```{r}
 #usamos el modelo previamente entrenado
-p.NB.log.test <- predict.glm(object = selec, newdata = data_test , type="response" )
+p.NB.log.test <- predict.glm(object = NB.log.final, newdata = data_test , type="response" )
 hist(p.NB.log.test)
 
 # APARECEN NAs. para lidiar con estos errores puntuales, asignamos la media. Esta decisión es arriesgada y no debería tenerse NUNCA
@@ -369,7 +503,7 @@ data_test <- data_test %>% mutate(Preds = p.NB.log.test)
 save(data_test, file='./Predicciones.RData')
 ```
 
-## Tarificación
+# Tarificación
 
 Ahora solo nos queda realizar la tarificación de precios. Este proceso lo hemos ido cambiando con el tiempo, conforme se competía con los otros equipos respecto a obtener los mejores precios para las mejores pólizas.  
 
