@@ -527,9 +527,11 @@ table(discr)
 
 Hemos hecho segmentos y ahora le asignamos unos precios a ojo a estos segmentos, siendo los de los últimos segmentos, claramente prohibitivos para que aquellas pólizas que juzgamos más peligrosas recaigan en la competencia.  
 
+
+
 ```{r}
 #vector de precios
-correspondencia_precios<-c(8,15,50,150,300,500,800,1000,1800,2000)
+correspondencia_precios<-c(9.91,16.99,54.99,134.99,500,700,1000,2000,2800,3000)
 names(correspondencia_precios)<-1:10
 correspondencia_precios
 ```
@@ -547,6 +549,8 @@ Y finalmente guardamos los resultados.
 ```{r}
 resultados <- data_test %>% dplyr::select(poliza, Preds, Prima)
 
-write.csv(resultados, file='./resultados_15mayo.csv', row.names = F)
+write.csv(resultados, file='./resultados_22mayo.csv', row.names = F)
 ```
+
+
 
